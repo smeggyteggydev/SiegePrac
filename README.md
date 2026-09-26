@@ -33,3 +33,10 @@ Tests (headless simulation: movement, knockback, hit detection, bot-vs-bot): `np
 | Esc | Pause |
 
 **Sprint reset:** a sprint hit knocks harder but drops your sprint. Release W for a split second (W-tap) or tap S to re-arm it — the `»` indicator above the hotbar turns orange until you do.
+
+## Feel notes
+
+- 60 Hz fixed-step simulation, rendered with interpolation; aim is applied straight from the mouse (no smoothing).
+- 1.8.9-style rules: no attack cooldown (clicks matter), 0.45 s hit window, 3.0 reach, classic air drag so knockback carries, sprint-hit knockback + sprint reset (W-tap / S-tap), falling crits, sword blocking.
+- Classic first-person hand transforms, swing curve, view bobbing and hurt-cam. Motion blur, hurt-cam strength, FOV and bobbing are in Settings.
+- All tuning lives in `src/config/constants.ts`.
