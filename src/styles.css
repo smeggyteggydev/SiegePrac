@@ -758,7 +758,7 @@ input[type='range']::-moz-range-thumb {
   inset: 5px;
   width: calc(100% - 10px);
   height: calc(100% - 10px);
-  image-rendering: auto;
+  image-rendering: pixelated;
   pointer-events: none;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
 }
@@ -780,6 +780,7 @@ input[type='range']::-moz-range-thumb {
   color: rgba(255, 255, 255, 0.4);
 }
 .inv-ghost {
+  image-rendering: pixelated;
   position: fixed;
   left: 0;
   top: 0;
@@ -798,6 +799,7 @@ input[type='range']::-moz-range-thumb {
 .inv-detail img {
   width: 96px;
   height: 96px;
+  image-rendering: pixelated;
   display: block;
   margin: 0 auto 8px;
 }

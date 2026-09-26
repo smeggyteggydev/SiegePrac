@@ -12,6 +12,7 @@ export interface Settings {
   quality: Quality;
   particles: boolean;
   cameraShake: number;
+  motionBlur: number;
   viewBobbing: boolean;
   showFps: boolean;
   showCps: boolean;
@@ -33,6 +34,7 @@ const DEFAULTS: Settings = {
   quality: 'high',
   particles: true,
   cameraShake: 0.6,
+  motionBlur: 0.3,
   viewBobbing: true,
   showFps: true,
   showCps: true,

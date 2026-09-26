@@ -13,7 +13,6 @@ import { audio } from '../audio/AudioEngine';
 import { Hud } from '../ui/Hud';
 import { Menu, Overlays, type GameMode } from '../ui/Menu';
 import { InventoryUI } from '../ui/InventoryUI';
-import { renderItemIcons } from '../ui/icons';
 import { h, show } from '../ui/dom';
 import { angleDiff, yawTo } from '../utils/math';
 import { Checkpoints } from './Checkpoints';
@@ -79,7 +78,6 @@ export class Game {
     this.nav = new NavGrid(this.arena.world, -24, -30, 24, 40);
     this.renderer = new Renderer(canvas, this.arena);
     this.renderer.setQuality(settings.get('quality'));
-    renderItemIcons(this.renderer.renderer, this.renderer.scene.environment);
 
     this.player = this.sim.add(new Fighter('You', 'blue', false));
     this.bot = this.sim.add(new Fighter('Siege Bot', 'red', true));
@@ -150,6 +148,7 @@ export class Game {
       this.renderer.setQuality(q);
     }
     this.renderer.particles.scale = settings.get('particles') ? 1 : 0.25;
+    this.renderer.motionBlur = settings.get('motionBlur');
     audio.setVolumes(settings.get('masterVolume'), settings.get('musicVolume'), settings.get('sfxVolume'));
   }
 
@@ -403,6 +402,7 @@ export class Game {
       }
     }
     this.sim.step(cmds);
+    if (this.phase !== 'menu') this.camRig.tick(this.player, C.SIM_DT);
     for (const e of this.sim.events) this.handleEvent(e);
     this.sim.events.length = 0;
     this.updatePhase();
@@ -656,7 +656,9 @@ export class Game {
       this.models.get(P.id)!.setNameTagVisible(false);
       this.models.get(this.bot.id)!.setNameTagVisible(this.bot.alive);
       R.showViewModel = !tp && P.alive;
-      R.viewModel.update(P, dt, R.camera.quaternion);
+      const bobOn = settings.get('viewBobbing');
+      R.viewModel.setBob(-this.camRig.walkPhase(alpha), bobOn ? this.camRig.bobAmount : 0, bobOn ? this.camRig.bobPitch : 0);
+      R.viewModel.update(P, dt, R.camera.quaternion, this.input.yaw, this.input.pitch);
       audio.setListener(R.camera.position.x, R.camera.position.y, R.camera.position.z, this.input.yaw);
 
       // HUD

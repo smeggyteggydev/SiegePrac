@@ -4,6 +4,8 @@ import { faceLayer, layerInfo, blockTextureArray } from './BlockTextures';
 import { hash3 } from '../utils/noise';
 
 const CHUNK = 16;
+/** Shared time uniform for foliage sway. */
+export const WORLD_TIME = { value: 0 };
 const AO_CURVE = [0.42, 0.62, 0.82, 1.0];
 
 interface FaceDef {
@@ -25,21 +27,34 @@ const FACES: FaceDef[] = [
 /** Material shared by all world chunks: MeshStandardMaterial + texture array sampling. */
 export function createWorldMaterial(): THREE.MeshStandardMaterial {
   const tex = blockTextureArray();
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.86, metalness: 0 });
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0, alphaTest: 0.5, side: THREE.FrontSide });
+  mat.userData.time = WORLD_TIME;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uBlockTex = { value: tex };
+    shader.uniforms.uTime = WORLD_TIME;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        '#include <common>\nattribute vec3 atlasUv;\nattribute vec2 matProps;\nvarying vec3 vAtlasUv;\nvarying vec2 vMatProps;',
+        '#include <common>\nattribute vec3 atlasUv;\nattribute vec3 matProps;\nvarying vec3 vAtlasUv;\nvarying vec2 vMatProps;\nuniform float uTime;',
       )
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvAtlasUv = atlasUv;\nvMatProps = matProps;');
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvAtlasUv = atlasUv;\nvMatProps = matProps.xy;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        if (matProps.z > 0.0) {
+          float ph = position.x * 0.7 + position.z * 0.5 + position.y * 0.3;
+          transformed.x += sin(uTime * 1.7 + ph) * 0.045 * matProps.z;
+          transformed.z += cos(uTime * 1.3 + ph * 1.3) * 0.035 * matProps.z;
+          transformed.y += sin(uTime * 2.1 + ph) * 0.02 * matProps.z;
+        }`,
+      );
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         '#include <common>\nuniform highp sampler2DArray uBlockTex;\nvarying vec3 vAtlasUv;\nvarying vec2 vMatProps;',
       )
       .replace('#include <map_fragment>', 'vec4 blockTexel = texture(uBlockTex, vAtlasUv);\ndiffuseColor *= blockTexel;')
+      .replace('#include <alphatest_fragment>', 'if (diffuseColor.a < 0.5) discard;')
       .replace(
         '#include <roughnessmap_fragment>',
         'float roughnessFactor = roughness - vMatProps.y * 0.5;',
@@ -50,7 +65,7 @@ export function createWorldMaterial(): THREE.MeshStandardMaterial {
         '#include <emissivemap_fragment>\ntotalEmissiveRadiance += blockTexel.rgb * vMatProps.x;',
       );
   };
-  mat.customProgramCacheKey = () => 'siege-world-v1';
+  mat.customProgramCacheKey = () => 'siege-world-v2';
   return mat;
 }
 
@@ -111,6 +126,7 @@ export class WorldRenderer {
             const nb = w.get(x + f.n[0], y + f.n[1], z + f.n[2]);
             // Cull faces hidden by an opaque neighbour (slab tops are always visible).
             if (isOpaque(nb) && !(shape === 'slab' && f.kind === 'top')) continue;
+            if (b === Block.Leaves && nb === Block.Leaves) continue;
             // A slab sits on the bottom of its cell, so it fully covers the top of the block below.
             if (f.kind === 'top' && shape === 'full' && blockShape(nb) === 'slab') continue;
             const layer = faceLayer(b as Block, f.kind);
@@ -130,18 +146,19 @@ export class WorldRenderer {
               col.push(t[0] * shade, t[1] * shade, t[2] * shade);
               let u: number;
               let v: number;
+              // One texture per block face (u,v in 0..1), like classic voxel games.
               if (f.kind !== 'side') {
-                u = vx / info.su;
-                v = -vz / info.sv;
+                u = c[0];
+                v = 1 - c[2];
               } else if (f.n[0] !== 0) {
-                u = (f.n[0] > 0 ? -vz : vz) / info.su;
-                v = vy / info.sv;
+                u = f.n[0] > 0 ? 1 - c[2] : c[2];
+                v = c[1] * hgt;
               } else {
-                u = (f.n[2] > 0 ? vx : -vx) / info.su;
-                v = vy / info.sv;
+                u = f.n[2] > 0 ? c[0] : 1 - c[0];
+                v = c[1] * hgt;
               }
               uvw.push(u, v, layer);
-              mat.push(info.emit, info.metal);
+              mat.push(info.emit, info.metal, info.wave);
             }
             if (ao[0] + ao[2] < ao[1] + ao[3]) idx.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
             else idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -153,7 +170,7 @@ export class WorldRenderer {
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     g.setAttribute('atlasUv', new THREE.Float32BufferAttribute(uvw, 3));
-    g.setAttribute('matProps', new THREE.Float32BufferAttribute(mat, 2));
+    g.setAttribute('matProps', new THREE.Float32BufferAttribute(mat, 3));
     g.setIndex(idx);
     g.computeBoundingSphere();
     g.computeBoundingBox();

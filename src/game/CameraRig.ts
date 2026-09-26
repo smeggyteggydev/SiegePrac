@@ -4,131 +4,141 @@ import { settings } from '../config/settings';
 import { damp, clamp } from '../utils/math';
 import type { VoxelWorld } from './World';
 
+const DEG = Math.PI / 180;
+
 /**
- * First-person camera: aim comes straight from input (zero smoothing), while
- * position gets subtle, competitive-safe feedback — sprint FOV, landing dip,
- * hurt tilt, step smoothing and optional view bob.
+ * First-person camera. Aim comes straight from input (zero smoothing); the
+ * feel comes from the classic view-bob (walk-distance driven sway + roll +
+ * pitch), the hurt-cam roll, sprint FOV and step smoothing.
  */
 export class CameraRig {
-  private eyeY = 0;
-  private fovK = 0;
-  private dip = 0;
-  private dipVel = 0;
-  private roll = 0;
-  private kick = 0;
-  private bob = 0;
-  private bobAmt = 0;
-  private lastFighterY = 0;
+  private eyeY = 1.62;
+  private fovMul = 1;
   thirdPerson = false;
   private tpDist = 0;
   private deathT = 0;
+  private lastY = 0;
+  // classic bob state
+  walkDist = 0;
+  private prevWalk = 0;
+  bobAmount = 0;
+  bobPitch = 0;
+  private hurtT = 0;
+  private hurtSide = 1;
+  private m = new THREE.Matrix4();
+  private t = new THREE.Matrix4();
+  private axis = new THREE.Vector3();
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
-  land(speed: number): void {
-    const s = settings.get('cameraShake');
-    this.dipVel -= clamp((speed - 3) / 14, 0, 1) * 1.6 * (0.4 + s * 0.6);
-  }
+  land(_speed: number): void {}
 
   hurt(dir: THREE.Vector3, yaw: number): void {
-    const s = settings.get('cameraShake');
-    // Tilt away from the side the hit came from.
     const rightX = Math.cos(yaw);
     const rightZ = -Math.sin(yaw);
-    const side = -(dir.x * rightX + dir.z * rightZ);
-    this.roll = (side >= 0 ? 1 : -1) * 0.075 * s;
+    const side = dir.x * rightX + dir.z * rightZ;
+    this.hurtSide = side >= 0 ? 1 : -1;
+    this.hurtT = 0.5;
   }
 
-  attackKick(strength: number): void {
-    this.kick = Math.min(1, this.kick + strength * settings.get('cameraShake'));
-  }
+  attackKick(_s: number): void {}
 
   resetDeath(): void {
     this.deathT = 0;
   }
 
-  update(
-    f: Fighter,
-    alpha: number,
-    yaw: number,
-    pitch: number,
-    dt: number,
-    world: VoxelWorld,
-    killer: Fighter | null,
-  ): void {
+  /** Advance per-tick camera state (call once per simulation tick). */
+  tick(f: Fighter, dtTick: number): void {
+    this.prevWalk = this.walkDist;
+    const moved = Math.hypot(f.pos.x - f.prevPos.x, f.pos.z - f.prevPos.z);
+    this.walkDist += moved * 0.6;
+    const perTick = Math.min(0.1, Math.hypot(f.vel.x, f.vel.z) / 20);
+    const want = f.onGround && f.alive ? perTick : 0;
+    this.bobAmount += (want - this.bobAmount) * 0.4;
+    const pitchWant = f.onGround || !f.alive ? 0 : Math.atan(-(f.vel.y / 20) * 0.2) * 15;
+    this.bobPitch += (pitchWant - this.bobPitch) * 0.8;
+    if (this.hurtT > 0) this.hurtT = Math.max(0, this.hurtT - dtTick);
+  }
+
+  update(f: Fighter, alpha: number, yaw: number, pitch: number, dt: number, world: VoxelWorld, killer: Fighter | null): void {
     const cam = this.camera;
     const px = f.prevPos.x + (f.pos.x - f.prevPos.x) * alpha;
     const py = f.prevPos.y + (f.pos.y - f.prevPos.y) * alpha;
     const pz = f.prevPos.z + (f.pos.z - f.prevPos.z) * alpha;
 
-    // Smooth step-ups (stairs) and crouch transitions, but track falls exactly.
-    const targetEye = f.eyeHeight;
-    this.eyeY += (targetEye - this.eyeY) * damp(18, dt);
-    const stepUp = py - this.lastFighterY;
-    this.lastFighterY = py;
-    if (f.onGround && stepUp > 0.05 && stepUp < 0.6) this.eyeY -= stepUp * 0.7;
+    // Crouch transition + stair smoothing; falls are tracked exactly.
+    this.eyeY += (f.eyeHeight - this.eyeY) * damp(20, dt);
+    const stepUp = py - this.lastY;
+    this.lastY = py;
+    if (f.onGround && stepUp > 0.05 && stepUp < 0.6) this.eyeY -= stepUp * 0.75;
 
-    // Landing spring
-    this.dipVel += -this.dip * 220 * dt;
-    this.dipVel *= 1 - damp(14, dt);
-    this.dip += this.dipVel * dt;
-
-    this.roll *= 1 - damp(6, dt);
-    this.kick *= 1 - damp(16, dt);
-
-    const speed = f.onGround ? f.horizontalSpeed() : 0;
-    this.bob += speed * dt * 2.1;
-    this.bobAmt += ((settings.get('viewBobbing') ? clamp(speed / 5.6, 0, 1) : 0) - this.bobAmt) * damp(8, dt);
-    const bobY = Math.abs(Math.cos(this.bob)) * 0.035 * this.bobAmt;
-    const bobX = Math.sin(this.bob) * 0.02 * this.bobAmt;
-
-    // FOV: subtle sprint widen
-    this.fovK += ((f.sprinting ? 1 : 0) - this.fovK) * damp(8, dt);
-    const fov = settings.get('fov') * (1 + this.fovK * 0.07);
+    // Sprint FOV (smoothed like the classic client, half-way per tick)
+    const want = f.sprinting ? 1.1 : 1;
+    this.fovMul += (want - this.fovMul) * (1 - Math.pow(0.5, dt * 20));
+    const fov = settings.get('fov') * this.fovMul;
     if (Math.abs(cam.fov - fov) > 0.01) {
       cam.fov = fov;
       cam.updateProjectionMatrix();
     }
 
     if (!f.alive) {
-      // Death cam: drop and roll, then look at who got you.
       this.deathT += dt;
       const k = clamp(this.deathT / 0.5, 0, 1);
-      cam.position.set(px, py + 1.62 - k * 1.2, pz);
+      cam.position.set(px, py + 1.62 - k * 1.3, pz);
       let ly = yaw;
       let lp = pitch;
       if (killer && killer.alive) {
         const dx = killer.pos.x - px;
         const dz = killer.pos.z - pz;
         const dy = killer.pos.y + 1.2 - cam.position.y;
-        const want = Math.atan2(-dx, -dz);
-        ly = yaw + (Math.atan2(Math.sin(want - yaw), Math.cos(want - yaw))) * k;
+        const w = Math.atan2(-dx, -dz);
+        ly = yaw + Math.atan2(Math.sin(w - yaw), Math.cos(w - yaw)) * k;
         lp = pitch + (Math.atan2(dy, Math.hypot(dx, dz)) - pitch) * k;
       }
-      cam.rotation.set(lp, ly, k * 0.5, 'YXZ');
+      cam.rotation.set(lp, ly, k * 0.6, 'YXZ');
+      cam.updateMatrixWorld();
       return;
     }
     this.deathT = 0;
 
-    const eye = new THREE.Vector3(px, py + this.eyeY + this.dip * 0.12 + bobY, pz);
-    const sinY = Math.sin(yaw);
-    const cosY = Math.cos(yaw);
-    eye.x += cosY * bobX;
-    eye.z += -sinY * bobX;
-
-    this.tpDist += ((this.thirdPerson ? 3.6 : 0) - this.tpDist) * damp(12, dt);
+    const eye = new THREE.Vector3(px, py + this.eyeY, pz);
+    this.tpDist += ((this.thirdPerson ? 4 : 0) - this.tpDist) * damp(12, dt);
     if (this.tpDist > 0.05) {
-      const dir = new THREE.Vector3(-sinY * Math.cos(pitch), Math.sin(pitch), -cosY * Math.cos(pitch));
+      const dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
       let d = this.tpDist;
       const hit = world.raycast(eye.x, eye.y, eye.z, -dir.x, -dir.y, -dir.z, d + 0.3);
       if (hit < d + 0.3) d = Math.max(0.3, hit - 0.3);
       eye.addScaledVector(dir, -d);
-      eye.x += cosY * 0.5;
-      eye.z += -sinY * 0.5;
     }
-
     cam.position.copy(eye);
-    cam.rotation.set(pitch + this.kick * 0.012, yaw, this.roll + bobX * 0.3, 'YXZ');
+    cam.rotation.set(pitch, yaw, 0, 'YXZ');
+    cam.updateMatrix();
+
+    // View transform extras, in view space: hurt roll, then bob.
+    const m = this.m.identity();
+    const R = (deg: number, x: number, y: number, z: number) => m.multiply(this.t.makeRotationAxis(this.axis.set(x, y, z), deg * DEG));
+    const shake = settings.get('cameraShake');
+    if (this.hurtT > 0) {
+      const h = this.hurtT / 0.5;
+      R(-Math.sin(h * h * h * h * Math.PI) * 14 * shake * this.hurtSide, 0, 0, 1);
+    }
+    if (settings.get('viewBobbing') && this.tpDist < 0.05) {
+      const ph = -this.walkPhase(alpha) * Math.PI;
+      const a = this.bobAmount;
+      m.multiply(this.t.makeTranslation(Math.sin(ph) * a * 0.5, -Math.abs(Math.cos(ph) * a), 0));
+      R(Math.sin(ph) * a * 3, 0, 0, 1);
+      R(Math.abs(Math.cos(ph - 0.2) * a) * 5, 1, 0, 0);
+      R(this.bobPitch, 1, 0, 0);
+    }
+    // view' = M · view  ⇒  cameraWorld' = cameraWorld · M⁻¹
+    cam.matrix.multiply(m.invert());
+    cam.matrix.decompose(cam.position, cam.quaternion, cam.scale);
+    cam.updateMatrixWorld();
+  }
+
+  /** Walk phase with sub-tick interpolation (for the hand bob too). */
+  walkPhase(alpha: number): number {
+    return this.prevWalk + (this.walkDist - this.prevWalk) * alpha;
   }
 
   get isThirdPerson(): boolean {

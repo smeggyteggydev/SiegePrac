@@ -1,109 +1,62 @@
 import * as THREE from 'three';
 import type { Fighter } from '../entities/Fighter';
 import type { ItemId } from './Items';
-import { buildItem } from './WeaponMeshes';
-import { damp, clamp } from '../utils/math';
+import { buildPixelItem } from './PixelItems';
+import { damp } from '../utils/math';
 import { SUN_DIR } from '../render/Sky';
+import { EAT_TIME } from '../config/constants';
+import { skinnedBox } from '../entities/Skins';
 
-const TRAIL_N = 14;
+const DEG = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+/** Held-item size relative to the vanilla first-person size (PvP packs shrink it). */
+const ITEM_SCALE = 0.74;
+const SWING_TIME = 0.3; // 6 ticks, like classic PvP
 
 /**
- * First-person weapon, rendered in its own scene after the world with a
- * cleared depth buffer so it never clips into walls or opponents.
+ * First-person hand, rendered in its own pass after the world (never clips).
+ * The transform chain follows the classic 1.8-era hand renderer: held
+ * position, sqrt/sin swing curves, block pose, eating bob and lagging arm
+ * sway — exactly the motion competitive players' muscle memory expects.
  */
 export class ViewModel {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
-  private rig = new THREE.Group(); // bob / sway / recoil
-  private holder = new THREE.Group(); // per-item rest pose + swing
-  private arm: THREE.Group;
+  private root = new THREE.Group(); // receives the full matrix each frame
   private item: THREE.Group | null = null;
+  private arm: THREE.Group;
   private itemId: ItemId | null | undefined = undefined;
   private sun: THREE.DirectionalLight;
   private swingT = 1;
-  private swingDur = 0.24;
-  private equipT = 1;
-  private bobPhase = 0;
-  private bobAmt = 0;
-  private sway = new THREE.Vector2();
-  private swayVel = new THREE.Vector2();
-  private landDip = 0;
-  private landVel = 0;
+  /** Freeze the swing at a progress value (automated screenshots). */
+  debugSwing: number | null = null;
+  private equip = 1;
+  private armYaw = 0;
+  private armPitch = 0;
+  private started = false;
   private blockK = 0;
-  private eatK = 0;
-  private sprintK = 0;
-  private hitKick = 0;
-  private swingSide = 1;
-
-  // Trail
-  private trail: THREE.Mesh;
-  private trailPos: Float32Array;
-  private trailAlpha: Float32Array;
-  private trailPts: { a: THREE.Vector3; b: THREE.Vector3; t: number }[] = [];
+  private bob = { phase: 0, amount: 0, pitch: 0 };
+  private m = new THREE.Matrix4();
+  private t = new THREE.Matrix4();
+  private axis = new THREE.Vector3();
 
   constructor(aspect: number) {
-    this.camera = new THREE.PerspectiveCamera(68, aspect, 0.01, 10);
+    this.camera = new THREE.PerspectiveCamera(70, aspect, 0.01, 10);
     this.scene.add(this.camera);
-    this.camera.add(this.rig);
-    this.rig.add(this.holder);
+    this.root.matrixAutoUpdate = false;
+    this.scene.add(this.root);
 
-    const hemi = new THREE.HemisphereLight('#cfe2ff', '#6b5a45', 1.1);
-    this.scene.add(hemi);
-    this.sun = new THREE.DirectionalLight('#ffe0b5', 2.4);
-    this.scene.add(this.sun);
-    this.scene.add(this.sun.target);
+    this.scene.add(new THREE.HemisphereLight('#dfe9ff', '#6b5a45', 1.3));
+    this.sun = new THREE.DirectionalLight('#ffe6c4', 2.2);
+    this.scene.add(this.sun, this.sun.target);
 
-    // Gauntleted forearm holding the grip
+    // Classic 4×12×4 px arm, pivot at the shoulder end.
     this.arm = new THREE.Group();
-    const sleeve = new THREE.Mesh(
-      new THREE.BoxGeometry(0.11, 0.11, 0.42),
-      new THREE.MeshStandardMaterial({ color: '#2f6fd1', roughness: 0.85 }),
-    );
-    sleeve.position.set(0.0, -0.02, 0.24);
-    const gauntlet = new THREE.Mesh(
-      new THREE.BoxGeometry(0.125, 0.125, 0.16),
-      new THREE.MeshStandardMaterial({ color: '#9aa3ae', metalness: 0.7, roughness: 0.35 }),
-    );
-    gauntlet.position.set(0, -0.02, 0.07);
-    const cuff = new THREE.Mesh(
-      new THREE.BoxGeometry(0.13, 0.13, 0.03),
-      new THREE.MeshStandardMaterial({ color: '#9fd0ff', metalness: 0.7, roughness: 0.3 }),
-    );
-    cuff.position.set(0, -0.02, 0.15);
-    const fist = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.09, 0.1),
-      new THREE.MeshStandardMaterial({ color: '#2c2f36', roughness: 0.8 }),
-    );
-    fist.position.set(0, 0, -0.01);
-    this.arm.add(sleeve, gauntlet, cuff, fist);
-    this.holder.add(this.arm);
-
-    // Trail ribbon
-    this.trailPos = new Float32Array(TRAIL_N * 2 * 3);
-    this.trailAlpha = new Float32Array(TRAIL_N * 2);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(this.trailPos, 3));
-    geo.setAttribute('alpha', new THREE.BufferAttribute(this.trailAlpha, 1));
-    const idx: number[] = [];
-    for (let i = 0; i < TRAIL_N - 1; i++) {
-      const a = i * 2;
-      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-    }
-    geo.setIndex(idx);
-    this.trail = new THREE.Mesh(
-      geo,
-      new THREE.ShaderMaterial({
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        uniforms: { uColor: { value: new THREE.Color('#9fe6ff') } },
-        vertexShader: `attribute float alpha; varying float vA; void main(){ vA = alpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-        fragmentShader: `uniform vec3 uColor; varying float vA; void main(){ gl_FragColor = vec4(uColor * vA, vA); }`,
-      }),
-    );
-    this.trail.frustumCulled = false;
-    this.camera.add(this.trail);
+    const armMesh = skinnedBox('blue', 'rightArm', 1 / 16);
+    const sleeve = skinnedBox('blue', 'rightSleeve', 1 / 16, 0.25);
+    armMesh.position.set(0, -6 / 16, 0);
+    sleeve.position.copy(armMesh.position);
+    this.arm.add(armMesh, sleeve);
   }
 
   setAspect(a: number): void {
@@ -113,166 +66,137 @@ export class ViewModel {
 
   setEnvironment(env: THREE.Texture | null): void {
     this.scene.environment = env;
-    this.scene.environmentIntensity = 0.8;
+    this.scene.environmentIntensity = 0.7;
   }
 
   private setItem(id: ItemId | null): void {
     if (id === this.itemId) return;
+    const first = this.itemId === undefined;
     this.itemId = id;
-    if (this.item) this.holder.remove(this.item);
-    this.item = buildItem(id);
-    this.item.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = false;
-    });
-    this.holder.add(this.item);
-    this.equipT = 0;
-    const color = id === 'axe' ? '#ffc07a' : '#9fe6ff';
-    ((this.trail.material as THREE.ShaderMaterial).uniforms.uColor.value as THREE.Color).set(color);
+    this.root.clear();
+    this.item = id ? buildPixelItem(id) : null;
+    this.root.add(this.item ?? this.arm);
+    if (!first) this.equip = 0;
   }
 
   /** Called when the local fighter swings. */
   swing(): void {
-    // Restart only once the previous swing is well underway so spam-clicking
-    // still reads as distinct swings rather than a jittery twitch.
-    if (this.swingT < 0.45) return;
-    this.swingT = 0;
-    this.swingSide = -this.swingSide;
-    this.trailPts.length = 0;
+    // Like the classic client: a new swing only restarts once past halfway.
+    if (this.swingT >= 0.5) this.swingT = 0;
   }
 
-  hit(crit: boolean): void {
-    this.hitKick = crit ? 1 : 0.6;
+  hit(_crit: boolean): void {}
+  land(_speed: number): void {}
+  look(_dYaw: number, _dPitch: number): void {}
+
+  /** View-bob state shared with the world camera. */
+  setBob(phase: number, amount: number, pitchDeg: number): void {
+    this.bob.phase = phase;
+    this.bob.amount = amount;
+    this.bob.pitch = pitchDeg;
   }
 
-  land(speed: number): void {
-    this.landVel -= clamp(speed / 14, 0, 1) * 0.6;
-  }
-
-  /** Mouse delta in radians this frame — drives weapon sway. */
-  look(dYaw: number, dPitch: number): void {
-    this.swayVel.x += dYaw * 1.6;
-    this.swayVel.y += dPitch * 1.6;
-  }
-
-  update(f: Fighter, dt: number, cameraWorldQuat: THREE.Quaternion): void {
+  update(f: Fighter, dt: number, cameraWorldQuat: THREE.Quaternion, yaw: number, pitch: number): void {
     this.setItem(f.heldItem()?.id ?? null);
 
-    // Sun direction in view space so lighting on the blade changes as you turn.
-    const inv = cameraWorldQuat.clone().invert();
-    const sd = SUN_DIR.clone().applyQuaternion(inv);
+    const sd = SUN_DIR.clone().applyQuaternion(cameraWorldQuat.clone().invert());
     this.sun.position.copy(sd).multiplyScalar(5);
-    this.sun.target.position.set(0, 0, 0);
 
-    const speed = f.onGround ? f.horizontalSpeed() : 0;
-    this.bobPhase += speed * dt * 2.1;
-    this.bobAmt += (clamp(speed / 5.6, 0, 1.2) - this.bobAmt) * damp(10, dt);
-    this.sprintK += ((f.sprinting ? 1 : 0) - this.sprintK) * damp(10, dt);
-    this.blockK += ((f.blocking ? 1 : 0) - this.blockK) * damp(22, dt);
-    this.eatK += ((f.eating > 0 ? 1 : 0) - this.eatK) * damp(14, dt);
-    this.equipT = Math.min(1, this.equipT + dt / 0.16);
-    this.swingT = Math.min(1, this.swingT + dt / this.swingDur);
-    this.hitKick *= 1 - damp(14, dt);
+    this.swingT = Math.min(1, this.swingT + dt / SWING_TIME);
+    this.equip = Math.min(1, this.equip + dt * 7);
+    this.blockK += ((f.blocking ? 1 : 0) - this.blockK) * damp(40, dt);
 
-    // Sway: critically damped spring toward zero
-    this.swayVel.multiplyScalar(1 - damp(18, dt));
-    this.sway.addScaledVector(this.swayVel, dt * 10);
-    this.sway.multiplyScalar(1 - damp(12, dt));
-    this.sway.x = clamp(this.sway.x, -0.06, 0.06);
-    this.sway.y = clamp(this.sway.y, -0.05, 0.05);
+    // Arm lag: follows the view at 0.5 per tick.
+    if (!this.started || Math.abs(yaw - this.armYaw) > 3) {
+      this.armYaw = yaw;
+      this.armPitch = pitch;
+      this.started = true;
+    }
+    const lag = 1 - Math.pow(0.5, dt * 20);
+    this.armYaw += (yaw - this.armYaw) * lag;
+    this.armPitch += (pitch - this.armPitch) * lag;
 
-    // Landing spring
-    this.landVel += -this.landDip * 180 * dt;
-    this.landVel *= 1 - damp(16, dt);
-    this.landDip += this.landVel * dt * 6;
+    const m = this.m.identity();
+    const T = (x: number, y: number, z: number) => m.multiply(this.t.makeTranslation(x, y, z));
+    const R = (deg: number, x: number, y: number, z: number) =>
+      m.multiply(this.t.makeRotationAxis(this.axis.set(x, y, z), deg * DEG));
+    const S = (s: number) => m.multiply(this.t.makeScale(s, s, s));
 
-    const bx = Math.sin(this.bobPhase) * 0.014 * this.bobAmt;
-    const by = -Math.abs(Math.cos(this.bobPhase)) * 0.016 * this.bobAmt;
-    const eq = 1 - this.equipT;
-    this.rig.position.set(
-      bx - this.sway.x,
-      by + this.sway.y - eq * eq * 0.35 + this.landDip * 0.08 - this.sprintK * 0.02,
-      this.hitKick * 0.03,
-    );
-    this.rig.rotation.set(this.sway.y * 1.2, -this.sway.x * 1.2, bx * 2 - this.sprintK * 0.08);
+    // View bobbing — same curve as the world camera.
+    const b = this.bob;
+    const ph = b.phase * Math.PI;
+    T(Math.sin(ph) * b.amount * 0.5, -Math.abs(Math.cos(ph) * b.amount), 0);
+    R(Math.sin(ph) * b.amount * 3, 0, 0, 1);
+    R(Math.abs(Math.cos(ph - 0.2) * b.amount) * 5, 1, 0, 0);
+    R(b.pitch, 1, 0, 0);
 
+    // Sway from turning (our yaw/pitch signs are mirrored vs. the classic client).
+    R(-(yaw - this.armYaw) * RAD2DEG * 0.1, 0, 1, 0);
+    R(-(pitch - this.armPitch) * RAD2DEG * 0.1, 1, 0, 0);
+
+    const p = this.debugSwing ?? (this.swingT >= 1 ? 0 : this.swingT);
+    const down = 1 - this.equip;
+    const sq = Math.sin(Math.sqrt(p) * Math.PI);
     const id = this.itemId;
-    const h = this.holder;
-    h.rotation.order = 'ZYX';
-    if (id === 'gapple') {
-      h.position.set(0.3, -0.3, -0.55);
-      h.rotation.set(-0.2, 0.4, 0.1);
-      // Eating: bring to mouth and nibble
-      const e = this.eatK;
-      h.position.x += (0.05 - 0.3) * e;
-      h.position.y += (-0.12 + 0.3) * e + Math.sin(performance.now() * 0.025) * 0.012 * e;
-      h.position.z += 0.18 * e;
-      h.rotation.x += 0.5 * e;
-      this.arm.position.set(0, -0.02, 0);
-      this.arm.rotation.set(0.1, 0, 0);
+
+    if (!id) {
+      // Empty hand: straight punch.
+      T(-0.3 * sq, 0.4 * Math.sin(Math.sqrt(p) * Math.PI * 2) * 0.3, -0.4 * Math.sin(p * Math.PI));
+      T(0.5, -0.46 - down * 0.6, -0.55);
+      R(sq * 25, 0, 1, 0);
+      R(-70, 1, 0, 0);
+      R(-8, 0, 1, 0);
+      R(12, 0, 0, 1);
+      S(1.0);
     } else {
-      // Rest pose: blade forward-up, leaning left across the view.
-      h.position.set(0.34, -0.33 - this.sprintK * 0.02, -0.56);
-      h.rotation.set(-1.05 + this.sprintK * 0.25, 0.25, 0.28 + this.sprintK * 0.15);
-      this.arm.position.set(0, 0, 0);
-      this.arm.rotation.set(Math.PI / 2, 0, 0);
-
-      // Block: blade horizontal across the screen
-      const b = this.blockK;
-      h.position.x += -0.14 * b;
-      h.position.y += 0.06 * b;
-      h.rotation.z += 1.05 * b;
-      h.rotation.x += 0.55 * b;
-      h.rotation.y += -0.2 * b;
-
-      // Swing: a fast diagonal slash, alternating sides.
-      if (this.swingT < 1) {
-        const k = this.swingT;
-        const s = Math.sin(k * Math.PI);
-        const cut = easeOutCubic(Math.min(1, k * 1.6));
-        const side = this.swingSide;
-        h.position.x += -s * 0.24;
-        h.position.y += s * 0.05 - cut * 0.02;
-        h.position.z += -s * 0.2;
-        h.rotation.x += -s * 1.05 + (cut - k) * 0.4;
-        h.rotation.y += s * 0.55 * side;
-        h.rotation.z += s * (0.6 + 0.35 * side);
+      if (id === 'gapple' && f.eating > 0) {
+        const left = Math.max(0, EAT_TIME - f.eating) * 20; // ticks remaining
+        const frac = left / (EAT_TIME * 20);
+        const up = frac >= 0.8 ? 0 : Math.abs(Math.cos((left / 4) * Math.PI) * 0.1);
+        T(0, up, 0);
+        const k = 1 - Math.pow(frac, 27);
+        T(k * 0.6, k * -0.5, 0);
+        R(k * 90, 0, 1, 0);
+        R(k * 10, 1, 0, 0);
+        R(k * 30, 0, 0, 1);
+        this.held(0, down, T, R, S);
+      } else if (this.blockK > 0.5 && id === 'sword') {
+        this.held(0, down, T, R, S);
+        T(-0.5, 0.2, 0);
+        R(30, 0, 1, 0);
+        R(-80, 1, 0, 0);
+        R(60, 0, 1, 0);
+      } else {
+        T(-0.4 * sq, 0.2 * Math.sin(Math.sqrt(p) * Math.PI * 2), -0.2 * Math.sin(p * Math.PI));
+        this.held(p, down, T, R, S);
       }
+      // Item display transform (first person, handheld)
+      T(0, 4 / 16, 2 / 16);
+      R(-135, 0, 1, 0);
+      R(25, 0, 0, 1);
+      S(1.7);
+      S(ITEM_SCALE); // PvP-style smaller held item
+      m.multiply(this.t.makeScale(-1, 1, 1));
     }
-
-    this.updateTrail(dt);
+    this.root.matrix.copy(m);
+    this.root.matrixWorldNeedsUpdate = true;
   }
 
-  private updateTrail(dt: number): void {
-    const swinging = this.swingT < 0.85 && this.item && this.itemId !== 'gapple' && this.blockK < 0.5;
-    if (swinging && this.item) {
-      const tip = (this.item.userData.tipLocal as THREE.Vector3).clone();
-      const base = (this.item.userData.baseLocal as THREE.Vector3).clone();
-      this.item.updateWorldMatrix(true, false);
-      // positions in camera space
-      const toCam = this.camera.matrixWorld.clone().invert().multiply(this.item.matrixWorld);
-      this.trailPts.unshift({ a: tip.applyMatrix4(toCam), b: base.applyMatrix4(toCam), t: 0 });
-      if (this.trailPts.length > TRAIL_N) this.trailPts.length = TRAIL_N;
-    }
-    for (const p of this.trailPts) p.t += dt;
-    while (this.trailPts.length && this.trailPts[this.trailPts.length - 1].t > 0.12) this.trailPts.pop();
-    for (let i = 0; i < TRAIL_N; i++) {
-      const p = this.trailPts[Math.min(i, this.trailPts.length - 1)];
-      if (!p) {
-        this.trailAlpha[i * 2] = this.trailAlpha[i * 2 + 1] = 0;
-        continue;
-      }
-      this.trailPos.set([p.a.x, p.a.y, p.a.z], i * 6);
-      this.trailPos.set([p.b.x, p.b.y, p.b.z], i * 6 + 3);
-      const fade = (1 - i / TRAIL_N) * clamp(1 - p.t / 0.12, 0, 1) * (i < this.trailPts.length ? 1 : 0);
-      this.trailAlpha[i * 2] = fade * 0.55;
-      this.trailAlpha[i * 2 + 1] = 0;
-    }
-    const g = this.trail.geometry;
-    g.attributes.position.needsUpdate = true;
-    g.attributes.alpha.needsUpdate = true;
+  private held(
+    p: number,
+    down: number,
+    T: (x: number, y: number, z: number) => void,
+    R: (deg: number, x: number, y: number, z: number) => void,
+    S: (s: number) => void,
+  ): void {
+    T(0.47, -0.43, -0.72);
+    T(0, down * -0.6, 0);
+    R(45, 0, 1, 0);
+    const f = Math.sin(p * p * Math.PI);
+    const f1 = Math.sin(Math.sqrt(p) * Math.PI);
+    R(f * -20, 0, 1, 0);
+    R(f1 * -20, 0, 0, 1);
+    R(f1 * -80, 1, 0, 0);
+    S(0.4);
   }
-}
-
-function easeOutCubic(t: number) {
-  return 1 - Math.pow(1 - t, 3);
 }

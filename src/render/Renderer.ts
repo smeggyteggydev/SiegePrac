@@ -12,6 +12,8 @@ import { DecorRenderer } from './Decor';
 import type { ArenaData } from '../maps/Arena';
 import { Particles } from '../effects/Particles';
 import { ViewModel } from '../weapons/ViewModel';
+import { MotionBlurPass } from './MotionBlurPass';
+import { WORLD_TIME } from './WorldMesher';
 
 const GradeShader = {
   uniforms: {
@@ -57,6 +59,8 @@ export class Renderer {
   private composer!: EffectComposer;
   private bloom!: UnrealBloomPass;
   private grade!: ShaderPass;
+  private blur!: MotionBlurPass;
+  motionBlur = 0.3;
   private vmPass!: RenderPass;
   private quality: Quality = 'high';
   showViewModel = true;
@@ -143,6 +147,8 @@ export class Renderer {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.32, 0.45, 0.92);
     this.bloom.enabled = q !== 'low';
     this.composer.addPass(this.bloom);
+    this.blur = new MotionBlurPass(size.x, size.y);
+    this.composer.addPass(this.blur);
     this.grade = new ShaderPass(GradeShader);
     this.composer.addPass(this.grade);
     this.composer.addPass(new OutputPass());
@@ -195,6 +201,10 @@ export class Renderer {
     this.particles.update(dt);
     this.water.updateReflection(this.renderer, this.scene, this.camera, this.reflectionHide);
     this.vmPass.enabled = this.showViewModel;
+    WORLD_TIME.value = time;
+    this.blur.enabled = this.motionBlur > 0.01;
+    this.blur.amount = this.motionBlur;
+    this.blur.dt = dt;
     this.grade.uniforms.uDamage.value = this.damage;
     this.grade.uniforms.uLowHealth.value = this.lowHealth;
     this.grade.uniforms.uTime.value = time;

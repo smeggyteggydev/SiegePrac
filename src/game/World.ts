@@ -42,7 +42,7 @@ SHAPES[Block.SlabPlanks] = 'slab';
 const OPAQUE: boolean[] = [];
 for (let i = 0; i < Block.Count; i++) OPAQUE[i] = SHAPES[i] === 'full';
 OPAQUE[Block.Barrier] = false;
-OPAQUE[Block.Leaves] = true;
+OPAQUE[Block.Leaves] = false; // cutout texture — neighbours stay visible
 
 export function blockShape(b: number): BlockShape {
   return SHAPES[b] ?? 'none';

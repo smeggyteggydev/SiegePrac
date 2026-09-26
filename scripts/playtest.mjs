@@ -63,9 +63,12 @@ if (steps.includes('duel')) {
   console.log(JSON.stringify(st));
   await page.evaluate(() => clearInterval(window.__aim));
   await page.keyboard.press('KeyE');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(600);
   await shot('08-inventory');
   await page.keyboard.press('KeyE');
+  await page.evaluate(() => { const g = window.__siege.game; g.camRig.thirdPerson = true; const p = g.player, b = g.bot; b.pos.set(p.pos.x + 1.5, p.pos.y, p.pos.z - 3); b.prevPos.copy(b.pos); });
+  await page.waitForTimeout(1500);
+  await shot('09-third-person');
 }
 console.log('ERRORS:\n' + errors.slice(0, 30).join('\n'));
 await browser.close();

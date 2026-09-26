@@ -290,9 +290,9 @@ function terrain(w: VoxelWorld) {
       const dz = (z - 6) / 52;
       const r = Math.hypot(dx, dz);
       const n = fbm2(x * 0.06, z * 0.06, 4, 11);
-      const rise = (r - 0.78) * 60 + (n - 0.5) * 12;
+      const rise = (r - 0.8) * 34 + (n - 0.5) * 9;
       if (rise <= 0) continue;
-      const h = Math.min(18, Math.floor(-5 + rise));
+      const h = Math.min(11, Math.floor(-4 + rise));
       if (h < bed + 1) continue;
       for (let y = bed + 1; y <= h; y++) {
         let b: Block = Block.Stone;
