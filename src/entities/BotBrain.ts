@@ -40,6 +40,8 @@ export interface BotProfile {
   mistakeRate: number;
   /** Learns the player's strafe rhythm. */
   adaptive: boolean;
+  /** NoDebuff: health at which it pots. */
+  potHealth: number;
 }
 
 export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
@@ -64,19 +66,20 @@ export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
     blockChance: 0,
     mistakeRate: 0.35,
     adaptive: false,
+    potHealth: 7,
   },
   normal: {
     label: 'NORMAL',
-    reaction: C.BOT_REACTION_TIME,
-    aimSpeed: 10,
+    reaction: 0.2,
+    aimSpeed: 9,
     aimSnap: 11,
-    aimError: 0.055,
+    aimError: 0.07,
     lead: 0.06,
-    cps: 8.5,
+    cps: 7.5,
     cpsJitter: 2,
     strafeSkill: 0.55,
     strafeSwitch: [0.45, 1.3],
-    wtap: 0.5,
+    wtap: 0.4,
     stap: 0.25,
     range: 2.65,
     comboFocus: 0.5,
@@ -84,8 +87,9 @@ export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
     jumpChance: 0.15,
     critChance: 0.2,
     blockChance: 0.1,
-    mistakeRate: 0.14,
+    mistakeRate: 0.18,
     adaptive: false,
+    potHealth: 9,
   },
   hard: {
     label: 'HARD',
@@ -108,6 +112,7 @@ export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
     blockChance: 0.2,
     mistakeRate: 0.05,
     adaptive: false,
+    potHealth: 11,
   },
   siege: {
     label: 'SIEGE',
@@ -130,6 +135,7 @@ export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
     blockChance: 0.22,
     mistakeRate: 0.035,
     adaptive: true,
+    potHealth: 12,
   },
 };
 
@@ -226,6 +232,11 @@ export class BotBrain {
   private weaveT = 0;
   private strafeModel = new StrafeModel();
   private approachJumpCd = 0;
+  private potting = false;
+  private potStart = 0;
+  private lastPot = -10;
+  private potsBefore = 0;
+  private refillTimer = 0;
 
   constructor(bot: Fighter, sim: Simulation, nav: NavGrid, profile: BotProfile, seed = 7) {
     this.bot = bot;
@@ -250,6 +261,8 @@ export class BotBrain {
     this.mistakeKind = null;
     this.path = null;
     this.prevLock = false;
+    this.potting = false;
+    this.refillTimer = 0;
   }
 
   private record(): void {
@@ -541,6 +554,13 @@ export class BotBrain {
     cmd.strafe = clamp(str, -1, 1);
     cmd.sprint = sprint;
 
+    // ── NoDebuff: pot, refill, speed ─────────────────────────────────────
+    const nd = this.noDebuff(cmd, snap, dist, dt);
+    if (nd) {
+      this.prevLock = b.sprintLock;
+      return nd;
+    }
+
     // ── Items ────────────────────────────────────────────────────────────
     const gappleSlot = b.inventory.findIndex((s, i) => i < 9 && s?.id === 'gapple');
     const swordSlot = b.inventory.findIndex((s, i) => i < 9 && s?.id === 'sword');
@@ -565,6 +585,90 @@ export class BotBrain {
       this.nextClick = this.sim.time + 1 / rate;
     }
     this.prevLock = b.sprintLock;
+    return cmd;
+  }
+
+  private hotbarSlot(id: string): number {
+    return this.bot.inventory.findIndex((s, i) => i < 9 && s?.id === id);
+  }
+
+  /** Returns a command when NoDebuff logic takes over this tick. */
+  private noDebuff(cmd: FighterCommand, snap: Snapshot, dist: number, dt: number): FighterCommand | null {
+    const b = this.bot;
+    const p = this.profile;
+    const pots = b.count('heal_pot');
+    if (pots === 0 && b.count('speed_pot') === 0) return null;
+    const now = this.sim.time;
+
+    // Refill: pull pots from storage into empty hotbar slots (takes a moment, like a real player).
+    if (this.refillTimer > 0) {
+      this.refillTimer -= dt;
+      if (this.refillTimer <= 0) {
+        for (let h = 0; h < 9; h++) {
+          if (b.inventory[h]) continue;
+          const from = b.inventory.findIndex((s, i) => i >= 9 && s?.id === 'heal_pot');
+          if (from < 0) break;
+          b.inventory[h] = b.inventory[from];
+          b.inventory[from] = null;
+        }
+      }
+      return this.runAway(cmd, snap, false);
+    }
+
+    const wantPot = pots > 0 && (this.potting || (b.health <= p.potHealth && now - this.lastPot > 0.55));
+    if (wantPot) {
+      const slot = this.hotbarSlot('heal_pot');
+      if (slot < 0) {
+        this.refillTimer = 0.7 + (1 - p.strafeSkill) * 0.6;
+        this.potting = false;
+        return this.runAway(cmd, snap, false);
+      }
+      if (!this.potting) {
+        this.potting = true;
+        this.potStart = now;
+        this.potsBefore = b.potsThrown;
+      }
+      if (b.potsThrown > this.potsBefore || now - this.potStart > 1.5) {
+        this.potting = false;
+        this.lastPot = now;
+        return null;
+      }
+      // Face away, sprint, look down, throw — then run into the splash.
+      const c = this.runAway(cmd, snap, true);
+      if (b.selected !== slot) c.slot = slot;
+      else if (this.pitch < -1.15 && now - this.potStart > 0.12) c.use = true;
+      return c;
+    }
+
+    // Drink speed when there's room to do it.
+    if (b.speedEffect <= 0 && dist > 7) {
+      const slot = this.hotbarSlot('speed_pot');
+      if (slot >= 0) {
+        const c = this.runAway(cmd, snap, false);
+        c.sprint = false;
+        c.forward = 0;
+        if (b.selected !== slot) c.slot = slot;
+        else c.use = true;
+        return c;
+      }
+    }
+    return null;
+  }
+
+  private runAway(cmd: FighterCommand, snap: Snapshot, lookDown: boolean): FighterCommand {
+    const dt = C.SIM_DT;
+    const yaw = this.retreatYaw(snap);
+    const k = 1 - Math.exp(-14 * dt);
+    this.yaw += angleDiff(this.yaw, yaw) * k;
+    const wantPitch = lookDown ? -1.45 : -0.1;
+    this.pitch += (wantPitch - this.pitch) * (1 - Math.exp(-16 * dt));
+    cmd.yaw = this.yaw;
+    cmd.pitch = this.pitch;
+    let [f, st] = this.avoidHazards(1, Math.sin(this.weaveT * 3) * 0.3);
+    cmd.forward = f;
+    cmd.strafe = st;
+    cmd.sprint = true;
+    cmd.attacks = 0;
     return cmd;
   }
 

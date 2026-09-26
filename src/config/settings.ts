@@ -27,14 +27,14 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   sensitivity: 1.0,
-  fov: 90,
+  fov: 80,
   masterVolume: 0.8,
   musicVolume: 0.35,
   sfxVolume: 0.9,
-  quality: 'high',
+  quality: 'medium',
   particles: true,
-  cameraShake: 0.6,
-  motionBlur: 0.3,
+  cameraShake: 0.4,
+  motionBlur: 0,
   viewBobbing: true,
   showFps: true,
   showCps: true,
@@ -47,7 +47,7 @@ const DEFAULTS: Settings = {
   firstTo: 3,
 };
 
-const KEY = 'siegeprac.settings.v1';
+const KEY = 'siegeprac.settings.v2';
 const LOADOUT_KEY = 'siegeprac.loadout.v1';
 const RECORDS_KEY = 'siegeprac.records.v1';
 

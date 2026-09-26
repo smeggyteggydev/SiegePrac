@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { fbm2 } from '../utils/noise';
 
-/** Late-afternoon sun: low enough for long shadows, off to the side of the main fighting axis. */
-export const SUN_DIR = new THREE.Vector3(-0.78, 0.44, 0.34).normalize();
-export const SUN_COLOR = new THREE.Color('#ffe0b5');
-export const HORIZON_COLOR = new THREE.Color('#f3cfa6');
-export const ZENITH_COLOR = new THREE.Color('#4f86c6');
-export const FOG_COLOR = new THREE.Color('#d9c4ad');
+/** Clear midday sun, off to the side of the main fighting axis so nobody fights into glare. */
+export const SUN_DIR = new THREE.Vector3(-0.55, 0.78, 0.3).normalize();
+export const SUN_COLOR = new THREE.Color('#fff4e6');
+export const HORIZON_COLOR = new THREE.Color('#b9d4ee');
+export const ZENITH_COLOR = new THREE.Color('#3f7fd6');
+export const FOG_COLOR = new THREE.Color('#bcd2e8');
 
 /** GLSL shared by the sky dome and the water reflection fallback. */
 export const SKY_GLSL = /* glsl */ `
@@ -19,11 +19,9 @@ vec3 skyColor(vec3 dir) {
   float t = pow(clamp(h, 0.0, 1.0), 0.45);
   vec3 col = mix(uHorizon, uZenith, t);
   // below horizon: dim warm haze
-  col = mix(col, uHorizon * 0.7, clamp(-h * 3.0, 0.0, 1.0));
+  col = mix(col, uHorizon * 0.85, clamp(-h * 3.0, 0.0, 1.0));
   float sd = max(dot(dir, uSunDir), 0.0);
-  col += uSunColor * (pow(sd, 6.0) * 0.28 + pow(sd, 64.0) * 0.6);
-  // warm band around the sun near the horizon
-  col += vec3(1.0, 0.55, 0.25) * pow(sd, 3.0) * (1.0 - t) * 0.35;
+  col += uSunColor * (pow(sd, 12.0) * 0.06 + smoothstep(0.9993, 0.9996, sd) * 1.2);
   return col;
 }
 `;
@@ -79,8 +77,8 @@ export class Sky {
             float c = smoothstep(0.52, 0.78, n);
             float edge = smoothstep(0.52, 0.62, n) - smoothstep(0.62, 0.8, n);
             float sd = max(dot(dir, uSunDir), 0.0);
-            vec3 cloudCol = mix(vec3(1.0, 0.93, 0.86), vec3(0.78, 0.74, 0.8), smoothstep(0.6, 0.9, n));
-            cloudCol += uSunColor * pow(sd, 8.0) * 0.5 + vec3(1.0,0.7,0.45) * edge * 0.25;
+            vec3 cloudCol = mix(vec3(1.0), vec3(0.82, 0.86, 0.92), smoothstep(0.6, 0.9, n));
+            cloudCol += vec3(0.05) * edge;
             float fade = smoothstep(0.02, 0.25, dir.y);
             col = mix(col, cloudCol, c * 0.85 * fade);
           }

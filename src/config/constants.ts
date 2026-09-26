@@ -6,7 +6,7 @@
  * The simulation runs at a fixed SIM_HZ tick; all rates are expressed per second.
  */
 
-export const SIM_HZ = 60;
+export const SIM_HZ = 120;
 export const SIM_DT = 1 / SIM_HZ;
 
 // ─── Body ─────────────────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ export const SPRINT_HIT_SLOWDOWN = 0.6;
 // ─── Combat ───────────────────────────────────────────────────────────────────
 export const MAX_HEALTH = 20;
 export const ATTACK_RANGE = 3.0; // eye → hitbox surface
-export const HITBOX_INFLATE = 0.1; // added to each side of the body box for hit tests
+export const HITBOX_INFLATE = 0.15; // added to each side of the body box for hit tests
 /** Minimum time between swings. Low: clicking fast matters, like classic PvP. */
 export const ATTACK_COOLDOWN = 0.05;
 /** After taking a hit, a fighter can't take another for this long (the "hit window"). */
@@ -71,11 +71,11 @@ export const BLOCK_DAMAGE_FACTOR = 0.5;
 export const BLOCK_KNOCKBACK_FACTOR = 0.8;
 
 /** Base horizontal knockback velocity applied to victim (m/s). */
-export const KNOCKBACK_HORIZONTAL = 7.2;
+export const KNOCKBACK_HORIZONTAL = 6.4;
 /** Vertical knockback velocity (m/s). */
 export const KNOCKBACK_VERTICAL = 7.2;
 /** Extra horizontal knockback for a fresh sprint hit (m/s). */
-export const KNOCKBACK_SPRINT_BONUS = 3.4;
+export const KNOCKBACK_SPRINT_BONUS = 2.8;
 export const KNOCKBACK_SPRINT_VERTICAL_BONUS = 0.6;
 /** Portion of victim's existing velocity preserved when knocked (0 = full reset). */
 export const KNOCKBACK_VELOCITY_KEEP = 0.5;
@@ -95,6 +95,20 @@ export const GAPPLE_HEAL = 4;
 export const GAPPLE_REGEN = 4; // extra healed over REGEN_TIME
 export const GAPPLE_REGEN_TIME = 5;
 export const GAPPLE_ABSORB = 4;
+
+// ─── NoDebuff ─────────────────────────────────────────────────────────────────
+export const POT_HEAL = 8; // Instant Health II at full splash effectiveness
+export const POT_RADIUS = 4;
+export const POT_SPEED = 10; // m/s (0.5 b/t)
+export const POT_GRAVITY = 20;
+export const POT_PITCH_OFFSET = 0.35; // thrown ~20° above aim
+export const PEARL_SPEED = 30;
+export const PEARL_GRAVITY = 12;
+export const PEARL_COOLDOWN = 10;
+export const PEARL_DAMAGE = 2.5;
+export const THROW_COOLDOWN = 0.2; // right-click repeat delay
+export const SPEED_EFFECT_TIME = 90;
+export const SPEED_EFFECT_MULT = 1.4; // Speed II
 
 // ─── Bot ──────────────────────────────────────────────────────────────────────
 export const BOT_REACTION_TIME = 0.16; // Normal

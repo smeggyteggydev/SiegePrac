@@ -44,7 +44,7 @@ export class InventoryUI {
       { class: 'inventory' },
       h('div', { class: 'inv-head' }, this.title, close),
       h('div', { class: 'inv-body' }, h('div', { class: 'inv-cols' }, h('div', { class: 'inv-label' }, 'STORAGE'), this.storage, h('div', { class: 'inv-label' }, 'HOTBAR'), this.bar), this.detail),
-      h('div', { class: 'inv-help' }, 'Drag to move · Hover + 1–9 to send to hotbar'),
+      h('div', { class: 'inv-help' }, 'Drag to move · Shift-click to quick-move (refill) · Hover + 1–9 to send to hotbar'),
     );
     parent.appendChild(this.root);
     document.body.appendChild(this.ghost);
@@ -93,6 +93,24 @@ export class InventoryUI {
 
   private pointerDown(i: number, e: PointerEvent): void {
     e.preventDefault();
+    if (e.shiftKey && !this.held && this.inv[i]) {
+      // Quick-move (refill): storage → first empty hotbar slot, hotbar → storage.
+      const toHotbar = i >= HOTBAR_SIZE;
+      let target = -1;
+      for (let j = toHotbar ? 0 : HOTBAR_SIZE; j < (toHotbar ? HOTBAR_SIZE : INVENTORY_SIZE); j++)
+        if (!this.inv[j]) {
+          target = j;
+          break;
+        }
+      if (target >= 0) {
+        this.inv[target] = this.inv[i];
+        this.inv[i] = null;
+        audio.select();
+        this.render();
+        this.onChange();
+      }
+      return;
+    }
     this.moved = false;
     if (this.held) {
       this.place(i);

@@ -29,7 +29,27 @@ export type SimEvent =
   | { type: 'eatDone'; fighter: Fighter }
   | { type: 'slot'; fighter: Fighter; slot: number }
   | { type: 'sprintReset'; fighter: Fighter }
-  | { type: 'comboBreak'; fighter: Fighter; combo: number };
+  | { type: 'comboBreak'; fighter: Fighter; combo: number }
+  | { type: 'throw'; fighter: Fighter; projectile: Projectile }
+  | { type: 'splash'; projectile: Projectile; point: Vector3; healed: { fighter: Fighter; amount: number }[] }
+  | { type: 'pearl'; fighter: Fighter; from: Vector3; to: Vector3 }
+  | { type: 'projectileGone'; projectile: Projectile };
+
+let nextProjectileId = 1;
+
+/** Thrown splash potion or ender pearl. */
+export class Projectile {
+  readonly id = nextProjectileId++;
+  readonly pos = new Vector3();
+  readonly prevPos = new Vector3();
+  readonly vel = new Vector3();
+  age = 0;
+  alive = true;
+  constructor(
+    readonly kind: 'heal_pot' | 'pearl',
+    readonly owner: Fighter,
+  ) {}
+}
 
 /**
  * Pure gameplay simulation: fixed timestep, no rendering, no DOM.
@@ -39,6 +59,7 @@ export class Simulation {
   readonly world: VoxelWorld;
   readonly fighters: Fighter[] = [];
   readonly events: SimEvent[] = [];
+  readonly projectiles: Projectile[] = [];
   readonly rng: Rng;
   time = 0;
   tick = 0;
@@ -92,7 +113,105 @@ export class Simulation {
       if (f.alive && cmd && cmd.attacks > 0) this.processAttacks(f, cmd.attacks);
     }
 
+    this.stepProjectiles(dt);
     for (const f of this.fighters) this.updateTimers(f, dt);
+  }
+
+  private throwItem(f: Fighter, kind: 'heal_pot' | 'pearl'): void {
+    const stack = f.heldItem();
+    if (!stack) return;
+    stack.count--;
+    if (stack.count <= 0) f.inventory[f.selected] = null;
+    f.throwCooldown = C.THROW_COOLDOWN;
+    f.swingTime = 0;
+    const p = new Projectile(kind, f);
+    f.eye(p.pos);
+    // Potions are thrown a little above the crosshair; pearls straight.
+    const pitch = kind === 'heal_pot' ? Math.min(Math.PI / 2, f.pitch + C.POT_PITCH_OFFSET) : f.pitch;
+    const cp = Math.cos(pitch);
+    const speed = kind === 'heal_pot' ? C.POT_SPEED : C.PEARL_SPEED;
+    p.vel.set(-Math.sin(f.yaw) * cp * speed, Math.sin(pitch) * speed, -Math.cos(f.yaw) * cp * speed);
+    p.pos.addScaledVector(p.vel, 0.02);
+    p.prevPos.copy(p.pos);
+    if (kind === 'pearl') f.pearlCooldown = C.PEARL_COOLDOWN;
+    else f.potsThrown++;
+    this.projectiles.push(p);
+    this.emit({ type: 'throw', fighter: f, projectile: p });
+  }
+
+  private stepProjectiles(dt: number): void {
+    for (const p of this.projectiles) {
+      if (!p.alive) continue;
+      p.prevPos.copy(p.pos);
+      p.age += dt;
+      const g = p.kind === 'heal_pot' ? C.POT_GRAVITY : C.PEARL_GRAVITY;
+      p.vel.y -= g * dt;
+      const drag = Math.pow(0.99, dt * 20);
+      p.vel.multiplyScalar(drag);
+      const step = p.vel.length() * dt;
+      const dir = p.vel.clone().normalize();
+      // world
+      let hitT = this.world.raycast(p.pos.x, p.pos.y, p.pos.z, dir.x, dir.y, dir.z, step);
+      let hitFighter: Fighter | null = null;
+      // fighters (skip the thrower briefly)
+      for (const f of this.fighters) {
+        if (!f.alive || (f === p.owner && p.age < 0.25)) continue;
+        const t = f.box().expand(0.15).rayHit(p.pos.x, p.pos.y, p.pos.z, dir.x, dir.y, dir.z);
+        if (t >= 0 && t <= step && t < hitT) {
+          hitT = t;
+          hitFighter = f;
+        }
+      }
+      if (hitT <= step) {
+        p.pos.addScaledVector(dir, Math.max(0, hitT - 0.05));
+        this.impact(p, hitFighter);
+      } else {
+        p.pos.addScaledVector(dir, step);
+        if (p.pos.y < C.VOID_Y - 2) {
+          p.alive = false;
+          this.emit({ type: 'projectileGone', projectile: p });
+        }
+      }
+    }
+    for (let i = this.projectiles.length - 1; i >= 0; i--) if (!this.projectiles[i].alive) this.projectiles.splice(i, 1);
+  }
+
+  private impact(p: Projectile, direct: Fighter | null): void {
+    p.alive = false;
+    if (p.kind === 'heal_pot') {
+      const healed: { fighter: Fighter; amount: number }[] = [];
+      for (const f of this.fighters) {
+        if (!f.alive) continue;
+        // Classic splash: effectiveness falls off with distance to the feet.
+        const d = f.pos.distanceTo(p.pos);
+        if (d > C.POT_RADIUS && f !== direct) continue;
+        const eff = f === direct ? 1 : 1 - d / C.POT_RADIUS;
+        const amount = Math.max(0, C.POT_HEAL * eff);
+        if (amount <= 0) continue;
+        f.health = Math.min(C.MAX_HEALTH, f.health + amount);
+        healed.push({ fighter: f, amount });
+      }
+      this.emit({ type: 'splash', projectile: p, point: p.pos.clone(), healed });
+    } else {
+      const f = p.owner;
+      if (!f.alive) return;
+      const from = f.pos.clone();
+      // land on top of whatever we hit, never inside a block
+      const to = p.pos.clone();
+      to.y = Math.max(to.y - 0.2, this.world.groundHeight(to.x, to.z, to.y + 0.5));
+      const box = f.box();
+      box.offset(to.x - f.pos.x, to.y - f.pos.y, to.z - f.pos.z);
+      if (this.world.intersects(box)) to.y = Math.ceil(to.y);
+      f.pos.copy(to);
+      f.prevPos.copy(to);
+      f.vel.set(0, 0, 0);
+      f.fallStartY = to.y;
+      f.health -= C.PEARL_DAMAGE;
+      f.stats.damageTaken += C.PEARL_DAMAGE;
+      this.emit({ type: 'pearl', fighter: f, from, to: to.clone() });
+      if (f.health <= 0) this.kill(f, f.lastDamagedBy, 'combat');
+    }
+    this.emit({ type: 'projectileGone', projectile: p });
   }
 
   private applyIntent(f: Fighter, c: FighterCommand, dt: number): void {
@@ -109,19 +228,22 @@ export class Simulation {
       if (!this.world.intersects(standBox)) f.crouching = false;
     }
 
-    // Use (block / eat)
+    // Use (block / eat / drink / throw)
     const def = f.heldDef();
     const stack = f.heldItem();
     f.blocking = false;
-    if (c.use && def) {
+    if (c.use && def && stack) {
       if (def.kind === 'weapon' && def.canBlock && c.attacks === 0) {
         f.blocking = true;
-      } else if (def.kind === 'consumable' && stack && stack.count > 0) {
+      } else if (def.kind === 'consumable' && stack.count > 0) {
         const before = f.eating;
         f.eating += dt;
         if (Math.floor(before / 0.22) !== Math.floor(f.eating / 0.22))
           this.emit({ type: 'eat', fighter: f, progress: f.eating / C.EAT_TIME });
         if (f.eating >= C.EAT_TIME) this.consume(f);
+      } else if (def.kind === 'throwable' && f.throwCooldown <= 0) {
+        if (stack.id === 'heal_pot') this.throwItem(f, 'heal_pot');
+        else if (stack.id === 'pearl' && f.pearlCooldown <= 0) this.throwItem(f, 'pearl');
       }
     } else {
       f.eating = 0;
@@ -170,6 +292,7 @@ export class Simulation {
             ? C.EAT_SPEED
             : C.PLAYER_SPEED;
     if (fwd < 0) speed *= C.BACKPEDAL_FACTOR;
+    if (f.speedEffect > 0) speed *= C.SPEED_EFFECT_MULT;
     if (Math.abs(str) > 0.1 && Math.abs(fwd) < 0.1) speed *= C.STRAFE_SPEED_FACTOR;
     const tx = wx * speed;
     const tz = wz * speed;
@@ -188,7 +311,7 @@ export class Simulation {
       f.vel.x *= drag;
       f.vel.z *= drag;
       if (hasWish) {
-        const acc = (f.sprinting ? C.AIR_ACCEL_SPRINT : C.AIR_ACCEL) * control * dt;
+        const acc = (f.sprinting ? C.AIR_ACCEL_SPRINT : C.AIR_ACCEL) * (f.speedEffect > 0 ? C.SPEED_EFFECT_MULT : 1) * control * dt;
         f.vel.x += wx * acc;
         f.vel.z += wz * acc;
       }
@@ -313,6 +436,7 @@ export class Simulation {
     if (!stack) return;
     stack.count--;
     if (stack.count <= 0) f.inventory[f.selected] = null;
+    if (stack.id === 'speed_pot') f.speedEffect = C.SPEED_EFFECT_TIME;
     if (stack.id === 'gapple') {
       f.health = Math.min(C.MAX_HEALTH, f.health + C.GAPPLE_HEAL);
       f.absorption = Math.max(f.absorption, C.GAPPLE_ABSORB);
@@ -328,6 +452,9 @@ export class Simulation {
     if (f.hitstun > 0) f.hitstun -= dt;
     if (f.jumpBuffer > 0) f.jumpBuffer -= dt;
     if (f.jumpCooldown > 0) f.jumpCooldown -= dt;
+    if (f.throwCooldown > 0) f.throwCooldown -= dt;
+    if (f.pearlCooldown > 0) f.pearlCooldown -= dt;
+    if (f.speedEffect > 0) f.speedEffect -= dt;
     if (f.coyote > 0 && !f.onGround) f.coyote -= dt;
     if (f.alive && f.regenLeft > 0) {
       const h = Math.min(f.regenLeft, (C.GAPPLE_REGEN / C.GAPPLE_REGEN_TIME) * dt);

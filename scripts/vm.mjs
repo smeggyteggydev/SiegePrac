@@ -3,7 +3,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('/opt/node22/lib/node_modules/playwright');
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
-await page.addInitScript(() => localStorage.setItem('siegeprac.settings.v1', JSON.stringify({ quality: process.env?.Q || 'medium' })));
+await page.addInitScript(() => localStorage.setItem('siegeprac.settings.v2', JSON.stringify({ quality: process.env?.Q || 'medium' })));
 await page.goto('http://localhost:4173/');
 await page.waitForFunction(() => window.__siege, null, { timeout: 60000 });
 await page.evaluate(() => { window.__siege.start('duel'); window.__siege.forceInput(true); });

@@ -283,6 +283,40 @@ export class AudioEngine {
     [660, 880, 1320].forEach((f, i) => this.tone(d, 'triangle', f, f, t + i * 0.06, 0.25, 0.35));
   }
 
+  throwItem(pos?: { x: number; y: number; z: number }): void {
+    if (!this.ok()) return;
+    const t = this.now();
+    this.burst(this.out(0.22, pos), 'bandpass', 500, 1600, 1.2, t, 0.16, 0.6, 0.02);
+  }
+
+  /** Splash potion shattering: glassy tinkles over a short crash. */
+  glass(pos?: { x: number; y: number; z: number }): void {
+    if (!this.ok()) return;
+    const t = this.now();
+    const d = this.out(0.5, pos);
+    this.burst(d, 'highpass', 3000, 6000, 0.7, t, 0.12, 0.8);
+    for (let i = 0; i < 5; i++) {
+      const f = 2400 + Math.random() * 3200;
+      this.tone(d, 'triangle', f, f * 0.97, t + i * 0.025 + Math.random() * 0.02, 0.18, 0.12);
+    }
+    this.burst(d, 'lowpass', 900, 300, 0.7, t, 0.1, 0.4);
+  }
+
+  heal(): void {
+    if (!this.ok()) return;
+    const t = this.now();
+    const d = this.out(0.2);
+    this.tone(d, 'sine', 660, 990, t, 0.25, 0.4, 0.02);
+  }
+
+  pearl(pos?: { x: number; y: number; z: number }): void {
+    if (!this.ok()) return;
+    const t = this.now();
+    const d = this.out(0.45, pos);
+    this.tone(d, 'sawtooth', 900, 120, t, 0.35, 0.12, 0.01);
+    this.burst(d, 'bandpass', 2000, 300, 2, t, 0.3, 0.5);
+  }
+
   // ── UI ────────────────────────────────────────────────────────────────────
   uiHover(): void {
     if (!this.ok()) return;

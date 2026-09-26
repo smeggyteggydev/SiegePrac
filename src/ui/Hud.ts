@@ -44,8 +44,11 @@ export class Hud {
   private center = h('div', { class: 'center-msg' });
   private feed = h('div', { class: 'killfeed' });
   private drill = h('div', { class: 'drill-info hidden' });
+  private info = h('div', { class: 'hud-info hidden' });
   private hearts: SVGSVGElement[] = [];
   private heartsEl = h('div', { class: 'hearts' });
+  private goldHearts: SVGSVGElement[] = [];
+  private goldEl = h('div', { class: 'hearts gold hidden' });
   private hpFill = h('div', { class: 'hp-fill' });
   private hpGhost = h('div', { class: 'hp-ghost' });
   private hpAbsorb = h('div', { class: 'hp-absorb' });
@@ -61,6 +64,7 @@ export class Hud {
   private oppGhost = h('div', { class: 'hp-ghost' });
   private oppAbsorb = h('div', { class: 'hp-absorb' });
   private scoreEl = h('div', { class: 'score' });
+  private vignette = h('div', { class: 'dmg-vignette' });
   private lockHint = h('div', { class: 'lock-hint hidden' }, h('div', { class: 'lock-key' }, 'CLICK'), h('div', null, 'TO CAPTURE MOUSE'));
   private ghost = MAX_HEALTH;
   private oppGhostV = MAX_HEALTH;
@@ -79,6 +83,11 @@ export class Hud {
       this.hearts.push(s);
       this.heartsEl.appendChild(s);
     }
+    for (let i = 0; i < 10; i++) {
+      const g = heartSvg();
+      this.goldHearts.push(g);
+      this.goldEl.appendChild(g);
+    }
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       const s = h('div', { class: 'slot' }, h('span', { class: 'slot-num' }, String(i + 1)), h('img', { class: 'slot-icon', alt: '' }), h('span', { class: 'slot-count' }));
       this.slots.push(s);
@@ -93,10 +102,12 @@ export class Hud {
     this.root = h(
       'div',
       { id: 'hud', class: 'hidden' },
+      this.vignette,
       h('div', { class: 'perf' }, this.cps, this.fps),
       this.opp,
       this.feed,
       this.drill,
+      this.info,
       this.crosshair,
       this.hitmark,
       this.dmgIndicator,
@@ -111,8 +122,8 @@ export class Hud {
         h(
           'div',
           { class: 'status' },
+          h('div', { class: 'vitals' }, this.goldEl, this.heartsEl),
           this.sprint,
-          h('div', { class: 'vitals' }, this.heartsEl, h('div', { class: 'hp-bar' }, this.hpGhost, this.hpFill, this.hpAbsorb), this.hpText),
         ),
         this.hotbar,
       ),
@@ -133,6 +144,16 @@ export class Hud {
     show(this.root, v);
   }
 
+  flashDamage(): void {
+    this.vignette.classList.remove('hit');
+    void this.vignette.offsetWidth;
+    this.vignette.classList.add('hit');
+  }
+
+  setLowHealth(v: boolean): void {
+    if (this.vignette.classList.contains('low') !== v) this.vignette.classList.toggle('low', v);
+  }
+
   setLockHint(v: boolean): void {
     show(this.lockHint, v);
   }
@@ -151,6 +172,13 @@ export class Hud {
         const rect = this.hearts[i].querySelector('rect')!;
         rect.setAttribute('width', String(16 * fill));
         this.hearts[i].classList.toggle('low', hp <= 6);
+      }
+      const gold = Math.ceil(absorb / 2);
+      show(this.goldEl, gold > 0);
+      for (let i = 0; i < 10; i++) {
+        this.goldHearts[i].style.display = i < gold ? '' : 'none';
+        const f = Math.max(0, Math.min(1, (absorb - i * 2) / 2));
+        this.goldHearts[i].querySelector('rect')!.setAttribute('width', String(16 * f));
       }
       this.hpFill.style.width = `${(hp / MAX_HEALTH) * 100}%`;
       this.hpAbsorb.style.width = `${Math.min(1, absorb / MAX_HEALTH) * 100}%`;
@@ -283,6 +311,11 @@ export class Hud {
     if (html !== null && this.drill.innerHTML !== html) this.drill.innerHTML = html;
   }
 
+  setInfo(html: string | null): void {
+    show(this.info, html !== null);
+    if (html !== null && this.info.innerHTML !== html) this.info.innerHTML = html;
+  }
+
   reset(): void {
     this.comboTimer = 0;
     show(this.comboEl, false);
@@ -296,10 +329,16 @@ export class Hud {
 
   update(dt: number, hp: number, oppHp: number): void {
     // Ghost bars drain after a short delay: shows the chunk you just lost.
-    this.ghost = Math.max(hp, this.ghost - dt * 9);
-    this.hpGhost.style.width = `${(Math.max(0, this.ghost) / MAX_HEALTH) * 100}%`;
-    this.oppGhostV = Math.max(oppHp, this.oppGhostV - dt * 9);
-    this.oppGhost.style.width = `${(Math.max(0, this.oppGhostV) / MAX_HEALTH) * 100}%`;
+    const g1 = Math.max(hp, this.ghost - dt * 9);
+    if (g1 !== this.ghost) {
+      this.ghost = g1;
+      this.hpGhost.style.width = `${(Math.max(0, g1) / MAX_HEALTH) * 100}%`;
+    }
+    const g2 = Math.max(oppHp, this.oppGhostV - dt * 9);
+    if (g2 !== this.oppGhostV) {
+      this.oppGhostV = g2;
+      this.oppGhost.style.width = `${(Math.max(0, g2) / MAX_HEALTH) * 100}%`;
+    }
 
     if (this.itemNameTimer > 0) {
       this.itemNameTimer -= dt;

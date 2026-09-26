@@ -9,7 +9,7 @@ import type { ItemId } from './Items';
 
 type Pixels = (string | null)[][];
 
-const OUTLINE: Record<ItemId, string> = { sword: '#171b24', axe: '#1c1510', gapple: '#5a3a08' };
+const OUTLINE: Record<ItemId, string> = { sword: '#171b24', axe: '#1c1510', gapple: '#5a3a08', heal_pot: '#2a1a24', speed_pot: '#16243a', pearl: '#0a2a26' };
 
 const PALETTES: Record<ItemId, Record<string, string>> = {
   sword: {
@@ -32,6 +32,9 @@ const PALETTES: Record<ItemId, Record<string, string>> = {
     e: '#ffb35c', // hot edge (emissive)
     b: '#3a2a1a',
   },
+  heal_pot: { L: '#f53b5e', D: '#b81c3c', H: '#ffa0b4', g: '#dcecff', G: '#ffffff', c: '#8a5a32' },
+  speed_pot: { L: '#6fc4ff', D: '#2f86d0', H: '#d2f0ff', g: '#dcecff', G: '#ffffff', c: '#8a5a32' },
+  pearl: { a: '#0f4a43', b: '#1f7d71', c: '#34b3a3', d: '#8fe8dc', e: '#08201d' },
   gapple: {
     Y: '#fff2a8',
     G: '#ffd23f',
@@ -137,7 +140,53 @@ function gapplePixels(): Pixels {
   return p;
 }
 
-const PIXELS: Record<ItemId, () => Pixels> = { sword: swordPixels, axe: axePixels, gapple: gapplePixels };
+function potionPixels(): Pixels {
+  const p = grid();
+  // cork + neck
+  set(p, 7, 1, 'c');
+  set(p, 8, 1, 'c');
+  for (let y = 2; y <= 4; y++) {
+    set(p, 7, y, 'g');
+    set(p, 8, y, y === 2 ? 'G' : 'g');
+  }
+  // round bulb
+  for (let y = 5; y < 15; y++)
+    for (let x = 2; x < 14; x++) {
+      const d = Math.hypot(x - 7.5, (y - 10) * 1.05);
+      if (d > 5.2) continue;
+      let c = y < 7 ? 'g' : d > 4.3 ? 'D' : 'L';
+      if (x < 6 && y < 10 && y >= 7 && d < 4.3) c = 'H';
+      if (y === 5 || (y === 6 && Math.abs(x - 7.5) > 1.5)) c = 'g';
+      set(p, x, y, c);
+    }
+  set(p, 5, 8, 'G');
+  outline(p);
+  return p;
+}
+
+function pearlPixels(): Pixels {
+  const p = grid();
+  for (let y = 0; y < 16; y++)
+    for (let x = 0; x < 16; x++) {
+      const d = Math.hypot(x - 7.5, y - 8.5);
+      if (d > 5.4) continue;
+      const light = -(x - 7.5) * 0.4 - (y - 8.5) * 0.5;
+      let c = d < 1.6 ? 'e' : light > 2 ? 'd' : light > 0 ? 'c' : light > -2 ? 'b' : 'a';
+      if (d < 2.6 && d >= 1.6) c = 'a';
+      set(p, x, y, c);
+    }
+  outline(p);
+  return p;
+}
+
+const PIXELS: Record<ItemId, () => Pixels> = {
+  sword: swordPixels,
+  axe: axePixels,
+  gapple: gapplePixels,
+  heal_pot: potionPixels,
+  speed_pot: potionPixels,
+  pearl: pearlPixels,
+};
 
 function colorOf(id: ItemId, ch: string): string {
   return ch === 'O' ? OUTLINE[id] : PALETTES[id][ch] ?? '#ff00ff';
@@ -201,7 +250,7 @@ export function buildPixelItem(id: ItemId): THREE.Group {
     geoCache.set(id, g);
   }
   const group = new THREE.Group();
-  const metal = id !== 'gapple';
+  const metal = id === 'sword' || id === 'axe';
   const solid = new THREE.Mesh(
     g.solid,
     new THREE.MeshStandardMaterial({ vertexColors: true, roughness: metal ? 0.45 : 0.5, metalness: metal ? 0.25 : 0.3 }),
@@ -222,8 +271,8 @@ export function buildPixelItem(id: ItemId): THREE.Group {
   return group;
 }
 
-/** The item sprite as a crisp PNG (hotbar / inventory icons). */
-export function itemIconUrl(id: ItemId, scale = 4): string {
+/** The item sprite drawn to a canvas. */
+export function itemIconCanvas(id: ItemId, scale = 4): HTMLCanvasElement {
   const px = PIXELS[id]();
   const c = document.createElement('canvas');
   c.width = c.height = 16 * scale;
@@ -235,5 +284,10 @@ export function itemIconUrl(id: ItemId, scale = 4): string {
       g.fillStyle = colorOf(id, ch);
       g.fillRect(x * scale, y * scale, scale, scale);
     }
-  return c.toDataURL('image/png');
+  return c;
+}
+
+/** The item sprite as a crisp PNG (hotbar / inventory icons). */
+export function itemIconUrl(id: ItemId, scale = 4): string {
+  return itemIconCanvas(id, scale).toDataURL('image/png');
 }

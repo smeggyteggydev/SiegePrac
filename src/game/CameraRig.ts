@@ -54,9 +54,9 @@ export class CameraRig {
     this.walkDist += moved * 0.6;
     const perTick = Math.min(0.1, Math.hypot(f.vel.x, f.vel.z) / 20);
     const want = f.onGround && f.alive ? perTick : 0;
-    this.bobAmount += (want - this.bobAmount) * 0.4;
+    this.bobAmount += (want - this.bobAmount) * (1 - Math.pow(0.6, dtTick * 20));
     const pitchWant = f.onGround || !f.alive ? 0 : Math.atan(-(f.vel.y / 20) * 0.2) * 15;
-    this.bobPitch += (pitchWant - this.bobPitch) * 0.8;
+    this.bobPitch += (pitchWant - this.bobPitch) * (1 - Math.pow(0.2, dtTick * 20));
     if (this.hurtT > 0) this.hurtT = Math.max(0, this.hurtT - dtTick);
   }
 

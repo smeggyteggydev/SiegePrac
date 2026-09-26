@@ -5,7 +5,7 @@ import { InventoryUI } from './InventoryUI';
 import { defaultLoadout } from '../weapons/Items';
 import { BOT_PROFILES, type BotDifficulty } from '../entities/BotBrain';
 
-export type GameMode = 'duel' | 'combo' | 'aim' | 'movement';
+export type GameMode = 'duel' | 'nodebuff' | 'combo' | 'aim' | 'movement';
 
 export interface MenuCallbacks {
   start(mode: GameMode): void;
@@ -210,6 +210,7 @@ export class Menu {
     );
     this.modeCards.replaceChildren(
       card('duel', 'BOT DUEL', 'A real 1v1 against the practice bot. Strafe, space, W-tap, combo.', duelExtra, `WINS VS ${BOT_PROFILES[diff].label}: ${wins(diff)}`),
+      card('nodebuff', 'NODEBUFF', 'Sword, pearls, speed and 33 heal pots. Look down + right-click to pot. E to refill.', null, `SAME BOT & FIRST-TO AS DUEL`),
       card('combo', 'COMBO', 'A dummy that walks into you. Chain hits and keep sprint knockback with W-taps.', null, `BEST COMBO: ${rec.bestCombo}`),
       card('aim', 'AIM', '40 seconds. An evasive target strafes and jumps. Track it and land clean hits.', null, `BEST: ${rec.bestAimScore} HITS`),
       card('movement', 'MOVEMENT', 'Race through 12 checkpoints across the arena. Sprint-jump, take the stairs, cut corners.', null, rec.bestMovementTime ? `BEST: ${rec.bestMovementTime.toFixed(2)}s` : 'NO TIME SET'),

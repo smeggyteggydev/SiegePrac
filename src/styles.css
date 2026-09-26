@@ -366,7 +366,7 @@ kbd {
 /* Mode select */
 .mode-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
   max-width: 1400px;
 }
@@ -375,8 +375,8 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 380px;
-  padding: 26px 22px 20px;
+  min-height: 360px;
+  padding: 22px 18px 18px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-top: 2px solid rgba(255, 255, 255, 0.12);
@@ -390,7 +390,7 @@ kbd {
 }
 .mode-title {
   font-family: var(--display);
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -1273,12 +1273,12 @@ input[type='range']::-moz-range-thumb {
 .bottom {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: 10px;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
 }
 .item-name {
   font-size: 14px;
@@ -1304,48 +1304,34 @@ input[type='range']::-moz-range-thumb {
   width: 100%;
   display: flex;
   align-items: flex-end;
-  justify-content: center;
-  gap: 16px;
-  position: relative;
+  justify-content: space-between;
+  padding: 0 1px;
 }
 .vitals {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  width: 290px;
-}
-.vitals .hp-bar {
-  width: 100%;
-  height: 7px;
-}
-.hp-text {
-  position: absolute;
-  right: -2px;
-  bottom: -1px;
-  transform: translateX(100%);
-  font-size: 13px;
-  font-weight: 600;
-  padding-left: 10px;
-  color: rgba(255, 255, 255, 0.85);
-  width: 70px;
+  align-items: flex-start;
+  gap: 1px;
 }
 .hearts {
   display: flex;
-  gap: 3px;
+  gap: 1px;
 }
 .heart {
-  width: 20px;
-  height: 20px;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
+  width: 17px;
+  height: 17px;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.8));
 }
 .heart-bg {
-  fill: rgba(20, 22, 28, 0.75);
-  stroke: rgba(0, 0, 0, 0.6);
-  stroke-width: 0.8;
+  fill: rgba(20, 22, 28, 0.8);
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: 1;
 }
 .heart-fg {
-  fill: #ff4a3d;
+  fill: #ff3b30;
+}
+.hearts.gold .heart-fg {
+  fill: #ffcc33;
 }
 .heart.low {
   animation: heartbeat 0.9s ease-in-out infinite;
@@ -1363,9 +1349,6 @@ input[type='range']::-moz-range-thumb {
   }
 }
 .sprint-ind {
-  position: absolute;
-  left: 0;
-  bottom: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1392,26 +1375,25 @@ input[type='range']::-moz-range-thumb {
 
 .hotbar {
   display: flex;
-  gap: 3px;
-  padding: 3px;
+  gap: 2px;
+  padding: 2px;
   background: rgba(8, 9, 12, 0.45);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 .slot {
   position: relative;
-  width: 54px;
-  height: 54px;
+  width: 42px;
+  height: 42px;
   background: rgba(255, 255, 255, 0.04);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.1s ease;
 }
 .slot.selected {
-  background: rgba(255, 122, 47, 0.14);
-  box-shadow: inset 0 0 0 2px var(--accent), 0 0 16px rgba(255, 122, 47, 0.25);
-  transform: translateY(-3px);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px rgba(0, 0, 0, 0.6);
 }
 .slot.selected .slot-num {
-  color: var(--accent);
+  color: #fff;
 }
 .slot.pop .slot-icon {
   animation: pop 0.16s ease-out;
@@ -1452,4 +1434,74 @@ input[type='range']::-moz-range-thumb {
   .settings-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.dmg-vignette {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(170, 10, 0, 0.45) 100%);
+}
+.dmg-vignette.hit {
+  animation: dmgflash 0.45s ease-out;
+}
+.dmg-vignette.low {
+  animation: lowpulse 1s ease-in-out infinite;
+}
+@keyframes dmgflash {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes lowpulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.hud-info {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.inf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 6px;
+  background: rgba(10, 12, 16, 0.5);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.inf i {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+}
+.inf span {
+  color: rgba(255, 255, 255, 0.7);
+}
+.inf.pots i {
+  background: #f53b5e;
+}
+.inf.pots b {
+  font-size: 18px;
+}
+.inf.speed i {
+  background: #7ac8ff;
+}
+.inf.pearl i {
+  background: #2fa89a;
+  border-radius: 50%;
 }

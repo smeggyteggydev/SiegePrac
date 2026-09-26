@@ -10,7 +10,7 @@ import { skinnedBox } from '../entities/Skins';
 const DEG = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 /** Held-item size relative to the vanilla first-person size (PvP packs shrink it). */
-const ITEM_SCALE = 0.74;
+const ITEM_SCALE = 0.9;
 const SWING_TIME = 0.3; // 6 ticks, like classic PvP
 
 /**
@@ -141,15 +141,15 @@ export class ViewModel {
 
     if (!id) {
       // Empty hand: straight punch.
-      T(-0.3 * sq, 0.4 * Math.sin(Math.sqrt(p) * Math.PI * 2) * 0.3, -0.4 * Math.sin(p * Math.PI));
-      T(0.5, -0.46 - down * 0.6, -0.55);
+      T(-0.3 * sq, 0.12 * Math.sin(Math.sqrt(p) * Math.PI * 2), -0.4 * Math.sin(p * Math.PI));
+      T(0.52, -0.5 - down * 0.6, -0.62);
       R(sq * 25, 0, 1, 0);
-      R(-70, 1, 0, 0);
-      R(-8, 0, 1, 0);
-      R(12, 0, 0, 1);
-      S(1.0);
+      R(-62, 1, 0, 0);
+      R(-18, 0, 1, 0);
+      R(14, 0, 0, 1);
+      S(0.8);
     } else {
-      if (id === 'gapple' && f.eating > 0) {
+      if ((id === 'gapple' || id === 'speed_pot') && f.eating > 0) {
         const left = Math.max(0, EAT_TIME - f.eating) * 20; // ticks remaining
         const frac = left / (EAT_TIME * 20);
         const up = frac >= 0.8 ? 0 : Math.abs(Math.cos((left / 4) * Math.PI) * 0.1);
@@ -161,21 +161,25 @@ export class ViewModel {
         R(k * 30, 0, 0, 1);
         this.held(0, down, T, R, S);
       } else if (this.blockK > 0.5 && id === 'sword') {
-        this.held(0, down, T, R, S);
+        // 1.7-style block-hit: the swing keeps playing inside the block pose.
+        T(-0.4 * sq * 0.5, 0.2 * Math.sin(Math.sqrt(p) * Math.PI * 2) * 0.5, -0.2 * Math.sin(p * Math.PI) * 0.5);
+        this.held(p, down, T, R, S);
         T(-0.5, 0.2, 0);
         R(30, 0, 1, 0);
         R(-80, 1, 0, 0);
         R(60, 0, 1, 0);
       } else {
-        T(-0.4 * sq, 0.2 * Math.sin(Math.sqrt(p) * Math.PI * 2), -0.2 * Math.sin(p * Math.PI));
+        T(-0.5 * sq, 0.12 * Math.sin(Math.sqrt(p) * Math.PI * 2), -0.2 * Math.sin(p * Math.PI));
         this.held(p, down, T, R, S);
       }
-      // Item display transform (first person, handheld)
+      // Item renderer: 2× pre-scale for flat items, display transform, then ½ scale.
+      S(2);
       T(0, 4 / 16, 2 / 16);
       R(-135, 0, 1, 0);
       R(25, 0, 0, 1);
       S(1.7);
-      S(ITEM_SCALE); // PvP-style smaller held item
+      S(0.5 * (id === 'sword' || id === 'axe' ? ITEM_SCALE : 0.68));
+      // Flat items are drawn mirrored by the classic 2D item renderer.
       m.multiply(this.t.makeScale(-1, 1, 1));
     }
     this.root.matrix.copy(m);
@@ -189,14 +193,16 @@ export class ViewModel {
     R: (deg: number, x: number, y: number, z: number) => void,
     S: (s: number) => void,
   ): void {
-    T(0.47, -0.43, -0.72);
+    // Classic held position, raised a touch so the guard sits in view.
+    T(0.5, -0.38, -0.72);
     T(0, down * -0.6, 0);
     R(45, 0, 1, 0);
     const f = Math.sin(p * p * Math.PI);
     const f1 = Math.sin(Math.sqrt(p) * Math.PI);
-    R(f * -20, 0, 1, 0);
-    R(f1 * -20, 0, 0, 1);
-    R(f1 * -80, 1, 0, 0);
+    // A sweeping slash across the crosshair (the vanilla −80° chop reads as a stab).
+    R(f * -40, 0, 1, 0);
+    R(f1 * 20, 0, 0, 1);
+    R(f1 * -25, 1, 0, 0);
     S(0.4);
   }
 }

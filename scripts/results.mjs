@@ -5,7 +5,7 @@ const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=sw
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const errs = [];
 page.on('pageerror', (e) => errs.push(e.message));
-await page.addInitScript(() => localStorage.setItem('siegeprac.settings.v1', JSON.stringify({ quality: 'low', firstTo: 3 })));
+await page.addInitScript(() => localStorage.setItem('siegeprac.settings.v2', JSON.stringify({ quality: 'low', firstTo: 3 })));
 await page.goto('http://localhost:4173/');
 await page.waitForFunction(() => window.__siege, null, { timeout: 60000 });
 await page.evaluate(() => { window.__siege.start('duel'); window.__siege.forceInput(true); });

@@ -13,8 +13,27 @@ const PX = 1.8 / 32;
  * Classic-proportioned player model (8/12/12 px head/body/legs) with the
  * familiar limb-swing, attack-swing, sneak, block and hurt-flash animation.
  */
+let shadowTex: THREE.Texture | null = null;
+function blobTexture(): THREE.Texture {
+  if (shadowTex) return shadowTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(16, 16, 2, 16, 16, 16);
+  grd.addColorStop(0, 'rgba(0,0,0,0.9)');
+  grd.addColorStop(0.7, 'rgba(0,0,0,0.5)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 32, 32);
+  shadowTex = new THREE.CanvasTexture(c);
+  return shadowTex;
+}
+
 export class FighterModel {
+  /** Ground height lookup for the blob shadow (set by the game). */
+  static groundAt: (x: number, z: number, fromY: number) => number = () => -Infinity;
   readonly root = new THREE.Group();
+  private blob: THREE.Mesh;
   private body = new THREE.Group();
   private torso = new THREE.Group();
   private head = new THREE.Group();
@@ -84,6 +103,17 @@ export class FighterModel {
     this.armR.add(this.hand);
     this.body.add(this.torso);
     this.root.add(this.body);
+
+    // Classic blob shadow (world shadows are baked; fighters don't cast into them)
+    this.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) o.castShadow = false;
+    });
+    this.blob = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.9, 0.9).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, opacity: 0.5 }),
+    );
+    this.blob.renderOrder = 2;
+    this.root.add(this.blob);
 
     // Name tag with health
     this.tagCanvas = document.createElement('canvas');
@@ -180,7 +210,7 @@ export class FighterModel {
       holder.add(pivot);
     }
     holder.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+      if ((o as THREE.Mesh).isMesh) o.castShadow = false;
     });
     this.itemMesh = holder;
     this.hand.add(holder);
@@ -192,6 +222,13 @@ export class FighterModel {
     const py = f.prevPos.y + (f.pos.y - f.prevPos.y) * alpha;
     const pz = f.prevPos.z + (f.pos.z - f.prevPos.z) * alpha;
     this.root.position.set(px, py, pz);
+    const gy = FighterModel.groundAt(px, pz, py + 0.3);
+    const above = py - gy;
+    this.blob.visible = Number.isFinite(gy) && above < 4 && f.alive;
+    if (this.blob.visible) {
+      this.blob.position.y = -above + 0.02;
+      (this.blob.material as THREE.MeshBasicMaterial).opacity = 0.45 * (1 - above / 4);
+    }
 
     const key = Math.round(f.health * 2) + Math.round(f.absorption * 2) * 100;
     if (key !== this.tagHealth) {

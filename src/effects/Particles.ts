@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 
 /**
- * Pooled voxel particles (tiny lit/emissive cubes) — one InstancedMesh, zero
- * allocations per frame. Fits the art style and costs one draw call.
+ * Classic square pixel-sprite particles (one Points draw call, pooled, no
+ * per-frame allocation). Types mirror what PvP players read instantly:
+ * enchant sparkles on hits, star crits, death smoke, block dust, potion swirls.
  */
+
+type Kind = 0 | 1 | 2 | 3 | 4; // 0 star-crit, 1 magic sparkle, 2 smoke, 3 square (dust/debris), 4 swirl
+
 interface P {
   alive: boolean;
   x: number;
@@ -20,50 +24,123 @@ interface P {
   r: number;
   g: number;
   b: number;
-  spin: number;
-  glow: boolean;
+  kind: Kind;
+  shrink: boolean;
+}
+
+const ATLAS_TILES = 5;
+
+/** 8×8 pixel sprites packed horizontally. */
+function makeAtlas(): THREE.DataTexture {
+  const W = 8 * ATLAS_TILES;
+  const H = 8;
+  const data = new Uint8Array(W * H * 4);
+  const put = (tile: number, x: number, y: number, a: number) => {
+    const o = ((7 - y) * W + tile * 8 + x) * 4;
+    data[o] = data[o + 1] = data[o + 2] = 255;
+    data[o + 3] = a;
+  };
+  // 0: star crit (plus with bright centre)
+  for (let i = 1; i < 7; i++) {
+    put(0, i, 3, 255);
+    put(0, i, 4, 255);
+    put(0, 3, i, 255);
+    put(0, 4, i, 255);
+  }
+  put(0, 0, 3, 140);
+  put(0, 7, 4, 140);
+  put(0, 3, 0, 140);
+  put(0, 4, 7, 140);
+  // 1: magic sparkle (diamond-ish X)
+  for (let i = 0; i < 8; i++) {
+    const d = Math.abs(i - 3.5);
+    if (d < 3.6) {
+      put(1, i, i, d < 2 ? 255 : 170);
+      put(1, 7 - i, i, d < 2 ? 255 : 170);
+    }
+  }
+  put(1, 3, 3, 255);
+  put(1, 4, 4, 255);
+  // 2: smoke puff (soft round blob)
+  for (let y = 0; y < 8; y++)
+    for (let x = 0; x < 8; x++) {
+      const d = Math.hypot(x - 3.5, y - 3.5);
+      if (d < 3.7) put(2, x, y, d < 2.5 ? 235 : 150);
+    }
+  // 3: solid square with a darker rim
+  for (let y = 1; y < 7; y++) for (let x = 1; x < 7; x++) put(3, x, y, 255);
+  // 4: swirl (potion)
+  const sw = ['..####..', '.#....#.', '#..##..#', '#.#..#.#', '#.#...#.', '#..#....', '.#..###.', '..#.....'];
+  sw.forEach((row, y) => [...row].forEach((c, x) => c === '#' && put(4, x, 7 - y, 255)));
+  const t = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
 }
 
 export class Particles {
-  readonly mesh: THREE.InstancedMesh;
-  readonly glowMesh: THREE.InstancedMesh;
+  readonly group = new THREE.Group();
+  private points: THREE.Points;
   private pool: P[] = [];
   private cursor = 0;
-  private m = new THREE.Matrix4();
-  private q = new THREE.Quaternion();
-  private e = new THREE.Euler();
-  private v = new THREE.Vector3();
-  private s = new THREE.Vector3();
-  private c = new THREE.Color();
+  private pos: Float32Array;
+  private col: Float32Array;
+  private size: Float32Array;
+  private tile: Float32Array;
+  private uniforms: { uAtlas: { value: THREE.Texture }; uScale: { value: number } };
   scale = 1;
 
-  constructor(readonly capacity = 900) {
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-    this.mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.6 }), capacity);
-    this.mesh.frustumCulled = false;
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.glowMesh = new THREE.InstancedMesh(
-      geo,
-      new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-      capacity,
-    );
-    this.glowMesh.frustumCulled = false;
-    this.glowMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < capacity; i++) {
-      this.pool.push({
-        alive: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1, size: 0.1,
-        grav: 0, drag: 0, r: 1, g: 1, b: 1, spin: 0, glow: false,
-      });
-    }
-    this.mesh.setColorAt(0, new THREE.Color());
-    this.glowMesh.setColorAt(0, new THREE.Color());
-    this.mesh.count = 0;
-    this.glowMesh.count = 0;
+  constructor(readonly capacity = 1600) {
+    this.pos = new Float32Array(capacity * 3);
+    this.col = new Float32Array(capacity * 4);
+    this.size = new Float32Array(capacity);
+    this.tile = new Float32Array(capacity);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('color', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('psize', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('tile', new THREE.BufferAttribute(this.tile, 1).setUsage(THREE.DynamicDrawUsage));
+    geo.setDrawRange(0, 0);
+    this.uniforms = { uAtlas: { value: makeAtlas() }, uScale: { value: 600 } };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      transparent: true,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        attribute vec4 color; attribute float psize; attribute float tile;
+        uniform float uScale;
+        varying vec4 vColor; varying float vTile;
+        void main(){
+          vColor = color; vTile = tile;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = max(1.0, psize * uScale / -mv.z);
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uAtlas;
+        varying vec4 vColor; varying float vTile;
+        void main(){
+          vec2 uv = vec2((vTile + gl_PointCoord.x) / ${ATLAS_TILES}.0, 1.0 - gl_PointCoord.y);
+          vec4 t = texture2D(uAtlas, uv);
+          if (t.a < 0.3) discard;
+          gl_FragColor = vec4(vColor.rgb * t.rgb, vColor.a * t.a);
+          #include <colorspace_fragment>
+        }`,
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 3;
+    this.group.add(this.points);
+    for (let i = 0; i < capacity; i++)
+      this.pool.push({ alive: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1, size: 0.1, grav: 0, drag: 0, r: 1, g: 1, b: 1, kind: 0, shrink: false });
   }
 
-  spawn(o: {
+  private c = new THREE.Color();
+
+  private spawn(o: {
     x: number; y: number; z: number; vx: number; vy: number; vz: number;
-    life: number; size: number; color: THREE.ColorRepresentation; grav?: number; drag?: number; glow?: boolean;
+    life: number; size: number; color: THREE.ColorRepresentation; kind: Kind; grav?: number; drag?: number; shrink?: boolean;
   }): void {
     const p = this.pool[this.cursor];
     this.cursor = (this.cursor + 1) % this.capacity;
@@ -73,112 +150,137 @@ export class Particles {
     p.life = 0;
     p.max = o.life;
     p.size = o.size;
-    p.grav = o.grav ?? 18;
-    p.drag = o.drag ?? 1.5;
+    p.kind = o.kind;
+    p.grav = o.grav ?? 0;
+    p.drag = o.drag ?? 3;
+    p.shrink = o.shrink ?? true;
     this.c.set(o.color);
     p.r = this.c.r; p.g = this.c.g; p.b = this.c.b;
-    p.spin = (Math.random() - 0.5) * 12;
-    p.glow = o.glow ?? false;
   }
 
-  /** Directional hit sparks spraying away from the attacker. */
+  private n(count: number): number {
+    return Math.max(1, Math.round(count * this.scale));
+  }
+
+  /** Every hit: enchanted-blade sparkles bursting off the victim's body. */
   hitBurst(point: THREE.Vector3, dir: THREE.Vector3, crit: boolean, blocked: boolean): void {
-    const n = Math.round((crit ? 26 : 14) * this.scale);
-    for (let i = 0; i < n; i++) {
-      const spread = 5;
-      const sp = (crit ? 7 : 5) * (0.5 + Math.random());
-      this.spawn({
-        x: point.x, y: point.y, z: point.z,
-        vx: dir.x * sp + (Math.random() - 0.5) * spread,
-        vy: 2 + Math.random() * 4,
-        vz: dir.z * sp + (Math.random() - 0.5) * spread,
-        life: 0.25 + Math.random() * 0.25,
-        size: 0.05 + Math.random() * 0.05,
-        color: blocked ? '#cfe6ff' : crit ? (Math.random() < 0.5 ? '#ffd24a' : '#fff1b0') : Math.random() < 0.6 ? '#ffffff' : '#ff6b4a',
-        grav: 16,
-        drag: 3,
-        glow: true,
-      });
-    }
-    // chunky red "damage" voxels
-    const m = Math.round((crit ? 8 : 5) * this.scale);
-    for (let i = 0; i < m; i++) {
-      this.spawn({
-        x: point.x, y: point.y, z: point.z,
-        vx: dir.x * 3 + (Math.random() - 0.5) * 3,
-        vy: 1 + Math.random() * 3,
-        vz: dir.z * 3 + (Math.random() - 0.5) * 3,
-        life: 0.45 + Math.random() * 0.3,
-        size: 0.08 + Math.random() * 0.05,
-        color: blocked ? '#8aa0b8' : '#c0302a',
-        grav: 22,
-        drag: 1,
-      });
-    }
-  }
-
-  /** Crit star ring around the victim. */
-  critRing(center: THREE.Vector3): void {
-    const n = Math.round(18 * this.scale);
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      this.spawn({
-        x: center.x, y: center.y + 1.0 + Math.random() * 0.6, z: center.z,
-        vx: Math.cos(a) * 4.5, vy: 0.5 + Math.random() * 1.5, vz: Math.sin(a) * 4.5,
-        life: 0.35, size: 0.06, color: '#ffe27a', grav: 4, drag: 5, glow: true,
-      });
-    }
-  }
-
-  dust(x: number, y: number, z: number, count: number, color = '#cbbfae'): void {
-    const n = Math.round(count * this.scale);
+    const n = this.n(blocked ? 6 : 12);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const sp = 1 + Math.random() * 1.8;
+      const up = Math.random() * 2 - 0.4;
+      const sp = 2.5 + Math.random() * 3.5;
       this.spawn({
-        x: x + Math.cos(a) * 0.2, y: y + 0.05, z: z + Math.sin(a) * 0.2,
-        vx: Math.cos(a) * sp, vy: 0.4 + Math.random() * 0.8, vz: Math.sin(a) * sp,
-        life: 0.35 + Math.random() * 0.25, size: 0.07 + Math.random() * 0.06, color, grav: -1, drag: 4,
+        x: point.x + (Math.random() - 0.5) * 0.5,
+        y: point.y + (Math.random() - 0.5) * 0.6,
+        z: point.z + (Math.random() - 0.5) * 0.5,
+        vx: Math.cos(a) * sp + dir.x * 2,
+        vy: up * sp * 0.6 + 1.2,
+        vz: Math.sin(a) * sp + dir.z * 2,
+        life: 0.35 + Math.random() * 0.35,
+        size: 0.09 + Math.random() * 0.05,
+        color: blocked ? '#c9d6e6' : Math.random() < 0.5 ? '#7fd6ff' : '#b8a4ff',
+        kind: 1,
+        drag: 4.5,
+        grav: 2,
+      });
+    }
+    if (crit) this.crits(point, dir);
+  }
+
+  private crits(point: THREE.Vector3, dir: THREE.Vector3): void {
+    const n = this.n(18);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 3 + Math.random() * 4;
+      this.spawn({
+        x: point.x, y: point.y + (Math.random() - 0.5) * 0.8, z: point.z,
+        vx: Math.cos(a) * sp + dir.x * 3, vy: 1.5 + Math.random() * 3, vz: Math.sin(a) * sp + dir.z * 3,
+        life: 0.4 + Math.random() * 0.3, size: 0.1 + Math.random() * 0.05,
+        color: Math.random() < 0.6 ? '#fff6c8' : '#ffd24a', kind: 0, drag: 4, grav: 9,
       });
     }
   }
 
-  /** Death: the fighter breaks apart into team-coloured voxels. */
-  deathBurst(pos: THREE.Vector3, team: 'red' | 'blue'): void {
-    const cols = team === 'red' ? ['#d4382f', '#9aa3ae', '#2c2f36', '#ffc27a'] : ['#2f6fd1', '#9aa3ae', '#2c2f36', '#9fd0ff'];
-    const n = Math.round(70 * this.scale);
+  critRing(_center: THREE.Vector3): void {}
+
+  dust(x: number, y: number, z: number, count: number, color = '#b9b2a4'): void {
+    const n = this.n(count);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const sp = 1.5 + Math.random() * 4;
+      const sp = 0.8 + Math.random() * 1.6;
       this.spawn({
-        x: pos.x + (Math.random() - 0.5) * 0.5, y: pos.y + Math.random() * 1.8, z: pos.z + (Math.random() - 0.5) * 0.5,
-        vx: Math.cos(a) * sp, vy: 2 + Math.random() * 5, vz: Math.sin(a) * sp,
-        life: 0.8 + Math.random() * 0.8, size: 0.09 + Math.random() * 0.1,
-        color: cols[i % cols.length], grav: 20, drag: 0.8,
+        x: x + Math.cos(a) * 0.25, y: y + 0.05, z: z + Math.sin(a) * 0.25,
+        vx: Math.cos(a) * sp, vy: 0.8 + Math.random() * 1.2, vz: Math.sin(a) * sp,
+        life: 0.35 + Math.random() * 0.25, size: 0.06 + Math.random() * 0.04, color, kind: 3, grav: 14, drag: 2,
       });
     }
-    const g = Math.round(30 * this.scale);
-    for (let i = 0; i < g; i++) {
+  }
+
+  /** Death: the classic white smoke poof. */
+  deathBurst(pos: THREE.Vector3, _team: 'red' | 'blue'): void {
+    const n = this.n(26);
+    for (let i = 0; i < n; i++) {
       this.spawn({
-        x: pos.x, y: pos.y + 0.9, z: pos.z,
-        vx: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 4, vz: (Math.random() - 0.5) * 3,
-        life: 0.7 + Math.random() * 0.5, size: 0.05, color: team === 'red' ? '#ff8a6a' : '#8cc4ff', grav: -2, drag: 2, glow: true,
+        x: pos.x + (Math.random() - 0.5) * 0.8, y: pos.y + Math.random() * 1.8, z: pos.z + (Math.random() - 0.5) * 0.8,
+        vx: (Math.random() - 0.5) * 1.2, vy: 0.3 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 1.2,
+        life: 0.6 + Math.random() * 0.6, size: 0.25 + Math.random() * 0.25,
+        color: Math.random() < 0.5 ? '#ffffff' : '#c9c9c9', kind: 2, drag: 1.5, grav: -0.5,
       });
     }
   }
 
   gappleSparkle(pos: THREE.Vector3): void {
-    for (let i = 0; i < 12 * this.scale; i++) {
+    for (let i = 0; i < this.n(12); i++)
       this.spawn({
         x: pos.x + (Math.random() - 0.5) * 0.8, y: pos.y + Math.random() * 1.8, z: pos.z + (Math.random() - 0.5) * 0.8,
-        vx: 0, vy: 1 + Math.random(), vz: 0, life: 0.8, size: 0.05, color: '#ffd24a', grav: -1, drag: 1, glow: true,
+        vx: 0, vy: 0.8 + Math.random(), vz: 0, life: 0.8, size: 0.08, color: '#ffd24a', kind: 1, drag: 1,
+      });
+  }
+
+  /** Splash potion shatter: coloured swirls in a ring. */
+  splash(pos: THREE.Vector3, color: string): void {
+    const n = this.n(28);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 1 + Math.random() * 3.5;
+      this.spawn({
+        x: pos.x, y: pos.y + 0.2 + Math.random() * 0.4, z: pos.z,
+        vx: Math.cos(a) * sp, vy: 1.5 + Math.random() * 2.5, vz: Math.sin(a) * sp,
+        life: 0.5 + Math.random() * 0.5, size: 0.065 + Math.random() * 0.035, color, kind: 4, drag: 2.2, grav: 3,
+      });
+    }
+    for (let i = 0; i < this.n(10); i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.spawn({
+        x: pos.x, y: pos.y + 0.2, z: pos.z,
+        vx: Math.cos(a) * 3, vy: 2 + Math.random() * 2, vz: Math.sin(a) * 3,
+        life: 0.5, size: 0.05, color: '#e8f4ff', kind: 3, grav: 16, drag: 1,
       });
     }
   }
 
-  update(dt: number): void {
+  /** Swirls rising off a fighter under an effect (speed, healing). */
+  effectSwirl(pos: THREE.Vector3, color: string): void {
+    this.spawn({
+      x: pos.x + (Math.random() - 0.5) * 0.6, y: pos.y + 0.2 + Math.random() * 1.6, z: pos.z + (Math.random() - 0.5) * 0.6,
+      vx: 0, vy: 0.4, vz: 0, life: 0.7, size: 0.09, color, kind: 4, drag: 1, shrink: false,
+    });
+  }
+
+  /** Ender pearl trail / teleport. */
+  portal(pos: THREE.Vector3, count: number): void {
+    for (let i = 0; i < this.n(count); i++)
+      this.spawn({
+        x: pos.x + (Math.random() - 0.5) * 0.6, y: pos.y + Math.random() * 1.8, z: pos.z + (Math.random() - 0.5) * 0.6,
+        vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2, vz: (Math.random() - 0.5) * 2,
+        life: 0.5 + Math.random() * 0.4, size: 0.07, color: Math.random() < 0.5 ? '#c35cff' : '#7a2fd0', kind: 3, drag: 2,
+      });
+  }
+
+  update(dt: number, camera: THREE.PerspectiveCamera): void {
+    // world-size → pixels
+    this.uniforms.uScale.value = (window.innerHeight * 0.5) / Math.tan((camera.fov * Math.PI) / 360);
     let n = 0;
-    let gn = 0;
     for (const p of this.pool) {
       if (!p.alive) continue;
       p.life += dt;
@@ -194,29 +296,26 @@ export class Particles {
       p.y += p.vy * dt;
       p.z += p.vz * dt;
       const k = 1 - p.life / p.max;
-      const size = p.size * (p.glow ? k : Math.min(1, k * 2.5));
-      this.e.set(p.life * p.spin, p.life * p.spin * 0.7, 0);
-      this.q.setFromEuler(this.e);
-      this.v.set(p.x, p.y, p.z);
-      this.s.setScalar(size);
-      this.m.compose(this.v, this.q, this.s);
-      if (p.glow) {
-        this.glowMesh.setMatrixAt(gn, this.m);
-        this.c.setRGB(p.r * 2.2 * k, p.g * 2.2 * k, p.b * 2.2 * k);
-        this.glowMesh.setColorAt(gn, this.c);
-        gn++;
-      } else {
-        this.mesh.setMatrixAt(n, this.m);
-        this.c.setRGB(p.r, p.g, p.b);
-        this.mesh.setColorAt(n, this.c);
-        n++;
-      }
+      this.pos[n * 3] = p.x;
+      this.pos[n * 3 + 1] = p.y;
+      this.pos[n * 3 + 2] = p.z;
+      // classic particles darken slightly and shrink as they age
+      const shade = 0.75 + 0.25 * k;
+      this.col[n * 4] = p.r * shade;
+      this.col[n * 4 + 1] = p.g * shade;
+      this.col[n * 4 + 2] = p.b * shade;
+      this.col[n * 4 + 3] = p.kind === 2 ? Math.min(1, k * 1.6) : 1;
+      this.size[n] = p.size * (p.shrink ? 0.35 + 0.65 * k : 1);
+      this.tile[n] = p.kind;
+      n++;
     }
-    this.mesh.count = n;
-    this.glowMesh.count = gn;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.glowMesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
-    if (this.glowMesh.instanceColor) this.glowMesh.instanceColor.needsUpdate = true;
+    const g = this.points.geometry;
+    g.setDrawRange(0, n);
+    for (const name of ['position', 'color', 'psize', 'tile']) {
+      const a = g.getAttribute(name) as THREE.BufferAttribute;
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, n * a.itemSize);
+      a.needsUpdate = true;
+    }
   }
 }

@@ -126,6 +126,11 @@ export class Fighter {
   swingCooldown = 0;
   blocking = false;
   eating = 0; // progress seconds, 0 when not eating
+  /** Remaining seconds of active effects. */
+  speedEffect = 0;
+  throwCooldown = 0;
+  pearlCooldown = 0;
+  potsThrown = 0;
 
   combo = 0;
   lastComboHitAt = -99;
@@ -171,6 +176,13 @@ export class Fighter {
     return out.set(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp);
   }
 
+  /** Count of an item across the whole inventory. */
+  count(id: string): number {
+    let n = 0;
+    for (const s of this.inventory) if (s && s.id === id) n += s.count;
+    return n;
+  }
+
   heldItem(): ItemStack | null {
     return this.inventory[this.selected] ?? null;
   }
@@ -207,6 +219,9 @@ export class Fighter {
     this.sprintLock = false;
     this.blocking = false;
     this.eating = 0;
+    this.speedEffect = 0;
+    this.throwCooldown = 0;
+    this.pearlCooldown = 0;
     this.combo = 0;
     this.comboTarget = null;
     this.onGround = false;

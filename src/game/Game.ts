@@ -4,6 +4,9 @@ import { buildArena, type ArenaData } from '../maps/Arena';
 import { Simulation, type SimEvent } from './Simulation';
 import { NavGrid } from './NavGrid';
 import { Fighter, type FighterCommand, emptyCommand, emptyStats } from '../entities/Fighter';
+import { nodebuffLoadout, type ItemId } from '../weapons/Items';
+import { itemIconCanvas } from '../weapons/PixelItems';
+import * as THREE from 'three';
 import { FighterModel } from '../entities/FighterModel';
 import { BotBrain, BOT_PROFILES, type BotDifficulty } from '../entities/BotBrain';
 import { Renderer } from '../render/Renderer';
@@ -40,6 +43,8 @@ export class Game {
   /** Drives the player's fighter in the menu attract-mode duel. */
   private attractBrain: BotBrain;
   private models = new Map<number, FighterModel>();
+  private projSprites = new Map<number, THREE.Sprite>();
+  private spriteMats = new Map<string, THREE.SpriteMaterial>();
   private checkpoints: Checkpoints;
 
   private phase: Phase = 'menu';
@@ -79,6 +84,7 @@ export class Game {
     this.renderer = new Renderer(canvas, this.arena);
     this.renderer.setQuality(settings.get('quality'));
 
+    FighterModel.groundAt = (x, z, y) => this.arena.world.groundHeight(x, z, y);
     this.player = this.sim.add(new Fighter('You', 'blue', false));
     this.bot = this.sim.add(new Fighter('Siege Bot', 'red', true));
     for (const f of [this.player, this.bot]) {
@@ -252,6 +258,7 @@ export class Game {
     this.ensureBot(mode !== 'movement');
     switch (mode) {
       case 'duel':
+      case 'nodebuff':
         this.bot.name = `Siege Bot`;
         this.botBrain.behavior = 'fight';
         break;
@@ -291,21 +298,26 @@ export class Game {
     if (this.phase !== 'menu' && this.mode === 'movement') {
       const p = w.marker('platform');
       this.player.reset(p.x, p.y, p.z, p.yaw);
-    } else if (this.phase !== 'menu' && this.mode !== 'duel') {
+    } else if (this.phase !== 'menu' && !this.isVersus) {
       this.player.reset(sb.x, sb.y, sb.z + 4, sb.yaw);
     } else {
       this.player.reset(sb.x, sb.y, sb.z, sb.yaw);
     }
     const botZ = this.phase !== 'menu' && (this.mode === 'combo' || this.mode === 'aim') ? sr.z - 6 : sr.z;
     this.bot.reset(sr.x, sr.y, botZ, sr.yaw);
-    const loadout = loadLoadout();
-    this.player.inventory = loadout.map((s) => (s ? { ...s } : null));
-    this.bot.inventory = [
-      { id: 'sword', count: 1 },
-      null,
-      { id: 'gapple', count: 2 },
-      ...new Array(this.player.inventory.length - 3).fill(null),
-    ];
+    if (this.phase !== 'menu' && this.mode === 'nodebuff') {
+      this.player.inventory = nodebuffLoadout();
+      this.bot.inventory = nodebuffLoadout();
+    } else {
+      const loadout = loadLoadout();
+      this.player.inventory = loadout.map((s) => (s ? { ...s } : null));
+      this.bot.inventory = [
+        { id: 'sword', count: 1 },
+        null,
+        { id: 'gapple', count: 2 },
+        ...new Array(this.player.inventory.length - 3).fill(null),
+      ];
+    }
     this.player.selected = Math.max(0, this.player.inventory.findIndex((s, i) => i < 9 && s?.id === 'sword'));
     this.bot.selected = 0;
     this.input.setLook(this.player.yaw, 0);
@@ -313,6 +325,9 @@ export class Game {
     this.attractBrain.reset();
     this.killer = null;
     this.camRig.resetDeath();
+    this.sim.projectiles.length = 0;
+    for (const sp of this.projSprites.values()) this.renderer.scene.remove(sp);
+    this.projSprites.clear();
     this.checkpoints.reset();
   }
 
@@ -320,15 +335,15 @@ export class Game {
     this.round++;
     this.phase = 'countdown';
     this.resetFighters();
-    this.phaseTimer = this.mode === 'duel' ? C.ROUND_COUNTDOWN : 1.2;
+    this.phaseTimer = this.isVersus ? C.ROUND_COUNTDOWN : 1.2;
     this.countdownShown = -1;
     this.drillTime = 0;
     this.input.clearPending();
-    if (this.mode === 'duel') {
-      const label = this.firstTo === 1 ? 'DUEL' : `ROUND ${this.round}`;
+    if (this.isVersus) {
+      const label = this.firstTo === 1 ? (this.mode === 'nodebuff' ? 'NODEBUFF' : 'DUEL') : `ROUND ${this.round}`;
       this.hud.message(label, `FIRST TO ${this.firstTo} · ${BOT_PROFILES[this.difficulty].label}`, 1.1, 'neutral');
     } else {
-      const names = { combo: 'COMBO DRILL', aim: 'AIM DRILL', movement: 'MOVEMENT DRILL', duel: '' };
+      const names = { combo: 'COMBO DRILL', aim: 'AIM DRILL', movement: 'MOVEMENT DRILL', duel: '', nodebuff: '' };
       this.hud.message(names[this.mode], this.mode === 'movement' ? 'REACH EVERY CHECKPOINT' : '', 1.1);
     }
   }
@@ -374,12 +389,12 @@ export class Game {
     if (!simPaused) {
       this.acc += dtReal * this.timeScale;
       let steps = 0;
-      while (this.acc >= C.SIM_DT && steps < 8) {
+      while (this.acc >= C.SIM_DT && steps < 16) {
         this.tick();
         this.acc -= C.SIM_DT;
         steps++;
       }
-      if (steps === 8) this.acc = 0;
+      if (steps === 16) this.acc = 0;
     }
     const alpha = simPaused ? 1 : this.acc / C.SIM_DT;
     this.renderFrame(alpha, dtReal);
@@ -423,14 +438,14 @@ export class Game {
       case 'countdown': {
         this.phaseTimer -= dt;
         const n = Math.ceil(this.phaseTimer);
-        if (this.mode === 'duel' && n <= 2 && n > 0 && n !== this.countdownShown) {
+        if (this.isVersus && n <= 2 && n > 0 && n !== this.countdownShown) {
           this.countdownShown = n;
           this.hud.message(String(n), '', 0.8, 'neutral');
           audio.countdown(false);
         }
         if (this.phaseTimer <= 0) {
           this.phase = 'fight';
-          if (this.mode === 'duel' || this.mode === 'aim') {
+          if (this.isVersus || this.mode === 'aim') {
             this.hud.message('FIGHT', '', 0.6, 'gold');
             audio.countdown(true);
           }
@@ -455,8 +470,8 @@ export class Game {
       case 'roundEnd': {
         this.phaseTimer -= dt;
         if (this.phaseTimer <= 0) {
-          if (this.mode === 'duel' && (this.score.player >= this.firstTo || this.score.bot >= this.firstTo)) this.finishMatch();
-          else if (this.mode === 'duel') this.startRound();
+          if (this.isVersus && (this.score.player >= this.firstTo || this.score.bot >= this.firstTo)) this.finishMatch();
+          else if (this.isVersus) this.startRound();
           else {
             // Drills: respawn in place and continue
             this.phase = 'fight';
@@ -555,7 +570,7 @@ export class Game {
         if (e.victim === P) {
           audio.hurt();
           this.camRig.hurt(e.dir, this.input.yaw);
-          R.damage = 1;
+          this.hud.flashDamage();
           const attackerYaw = yawTo(P.pos.x, P.pos.z, e.attacker.pos.x, e.attacker.pos.z);
           this.hud.damage(-angleDiff(this.input.yaw, attackerYaw));
           if (e.combo >= 3) this.hud.comboEnd();
@@ -574,13 +589,13 @@ export class Game {
         if (this.phase !== 'fight') break;
         if (e.victim === P) {
           this.killer = e.killer;
-          if (this.mode === 'duel') {
+          if (this.isVersus) {
             this.score.bot++;
             this.hud.message(lake ? 'KNOCKED OUT' : 'ELIMINATED', `${e.victim.name === 'You' ? 'by ' + this.bot.name.toUpperCase() : ''}`, 1.4, 'bad');
           } else this.hud.message(lake ? 'INTO THE LAKE' : 'DOWN', '', 1, 'bad');
           this.hud.feedItem(`<b class="red">${this.bot.name}</b> ${lake ? '<i>☄</i>' : '<i>⚔</i>'} <b class="blue">You</b>`);
         } else if (e.victim === this.bot) {
-          if (this.mode === 'duel') {
+          if (this.isVersus) {
             this.score.player++;
             audio.kill();
             this.slowmoTimer = 0.35;
@@ -590,7 +605,7 @@ export class Game {
         }
         if (this.phase === 'fight') {
           this.phase = 'roundEnd';
-          this.phaseTimer = this.mode === 'duel' ? C.RESPAWN_DELAY : 0.8;
+          this.phaseTimer = this.isVersus ? C.RESPAWN_DELAY : 0.8;
         }
         break;
       }
@@ -623,6 +638,32 @@ export class Game {
         break;
       case 'sprintReset':
         break;
+      case 'throw':
+        if (inMenu) break;
+        if (e.fighter === P) {
+          R.viewModel.swing();
+          audio.throwItem();
+        } else audio.throwItem(e.fighter.pos);
+        break;
+      case 'splash':
+        R.particles.splash(e.point, '#ff5a7a');
+        if (inMenu) break;
+        audio.glass(e.point);
+        if (e.healed.some((x) => x.fighter === P)) audio.heal();
+        break;
+      case 'pearl':
+        R.particles.portal(e.from, 24);
+        R.particles.portal(e.to, 24);
+        if (!inMenu) audio.pearl(e.fighter === P ? undefined : e.to);
+        break;
+      case 'projectileGone': {
+        const sp = this.projSprites.get(e.projectile.id);
+        if (sp) {
+          this.renderer.scene.remove(sp);
+          this.projSprites.delete(e.projectile.id);
+        }
+        break;
+      }
     }
   }
 
@@ -633,6 +674,7 @@ export class Game {
     const t = this.renderTime;
 
     for (const m of this.models.values()) m.update(alpha, dt, t);
+    this.syncProjectiles(alpha);
 
     if (this.phase === 'menu') {
       this.menuCamT += dt;
@@ -674,21 +716,65 @@ export class Game {
       this.hud.setSprint(P.sprintLock ? 'locked' : P.sprinting ? 'on' : 'off');
       this.hud.setEat(P.eating);
       const hasBot = this.sim.fighters.includes(this.bot);
-      this.hud.setOpponent(hasBot ? `${this.bot.name.toUpperCase()}${this.mode === 'duel' ? ' · ' + BOT_PROFILES[this.difficulty].label : ''}` : null, this.bot.health, this.bot.absorption);
+      const oppPots = this.mode === 'nodebuff' ? ` · ${this.bot.count('heal_pot')} POTS` : '';
+      this.hud.setOpponent(hasBot ? `${this.bot.name.toUpperCase()}${this.isVersus ? ' · ' + BOT_PROFILES[this.difficulty].label : ''}${oppPots}` : null, this.bot.health, this.bot.absorption);
       this.hud.setScore(
-        this.mode === 'duel'
+        this.isVersus
           ? `<span class="you">${this.score.player}</span><span class="pips">${pips(this.score.player, this.firstTo, 'blue')}<i>FT${this.firstTo}</i>${pips(this.score.bot, this.firstTo, 'red')}</span><span class="them">${this.score.bot}</span>`
           : null,
       );
       this.hud.setDrill(this.drillHtml());
+      this.hud.setInfo(this.infoHtml());
       this.hud.update(dt, P.health, this.bot.health);
       this.hud.setLockHint(!this.input.locked && !this.paused && !this.invOpen && this.phase !== 'results');
     }
 
     this.checkpoints.render(t);
-    R.damage = Math.max(0, R.damage - dt * 2.2);
-    R.lowHealth = this.phase !== 'menu' && P.alive && P.health <= 6 ? 1 - P.health / 6 * 0.6 : 0;
+    this.hud.setLowHealth(this.phase !== 'menu' && P.alive && P.health <= 6);
     R.render(t, dt);
+  }
+
+  private spriteMat(id: ItemId): THREE.SpriteMaterial {
+    let m = this.spriteMats.get(id);
+    if (!m) {
+      const tex = new THREE.CanvasTexture(itemIconCanvas(id, 2));
+      tex.magFilter = THREE.NearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      m = new THREE.SpriteMaterial({ map: tex, alphaTest: 0.5 });
+      this.spriteMats.set(id, m);
+    }
+    return m;
+  }
+
+  private syncProjectiles(alpha: number): void {
+    for (const p of this.sim.projectiles) {
+      let sp = this.projSprites.get(p.id);
+      if (!sp) {
+        sp = new THREE.Sprite(this.spriteMat(p.kind));
+        sp.scale.setScalar(p.kind === 'pearl' ? 0.3 : 0.42);
+        this.renderer.scene.add(sp);
+        this.projSprites.set(p.id, sp);
+      }
+      sp.position.lerpVectors(p.prevPos, p.pos, alpha);
+      if (p.kind === 'pearl' && Math.random() < 0.3) this.renderer.particles.portal(sp.position.clone().setY(sp.position.y - 0.8), 1);
+    }
+  }
+
+  private infoHtml(): string | null {
+    const P = this.player;
+    const parts: string[] = [];
+    if (this.mode === 'nodebuff') parts.push(`<div class="inf pots"><i></i><b>${P.count('heal_pot')}</b><span>POTS</span></div>`);
+    if (P.speedEffect > 0) {
+      const t = Math.ceil(P.speedEffect);
+      parts.push(`<div class="inf speed"><i></i><b>Speed II</b><span>${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}</span></div>`);
+    }
+    if (P.pearlCooldown > 0) parts.push(`<div class="inf pearl"><i></i><b>Pearl</b><span>${P.pearlCooldown.toFixed(1)}s</span></div>`);
+    return parts.length ? parts.join('') : null;
+  }
+
+  /** Duel-style modes: rounds, score, first-to. */
+  get isVersus(): boolean {
+    return this.mode === 'duel' || this.mode === 'nodebuff';
   }
 
   private drillHtml(): string | null {

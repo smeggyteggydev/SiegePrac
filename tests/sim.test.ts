@@ -27,11 +27,11 @@ function run(sim: Simulation, ticks: number, cmds: (t: number) => Map<number, Fi
 describe('movement', () => {
   it('settles on the ground and reaches walk / sprint speed quickly', () => {
     const { sim, a } = setup();
-    run(sim, 30, () => new Map([[a.id, { ...emptyCommand(), yaw: Math.PI }]]));
+    run(sim, C.SIM_HZ / 2, () => new Map([[a.id, { ...emptyCommand(), yaw: Math.PI }]]));
     expect(a.onGround).toBe(true);
     expect(a.pos.y).toBeCloseTo(0, 3);
     let t95 = -1;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < C.SIM_HZ; i++) {
       sim.step(new Map([[a.id, { ...emptyCommand(), forward: 1, sprint: true, yaw: Math.PI }]]));
       sim.events.length = 0;
       if (t95 < 0 && a.horizontalSpeed() > C.SPRINT_SPEED * 0.95) t95 = i;
@@ -40,15 +40,15 @@ describe('movement', () => {
     expect(a.horizontalSpeed()).toBeGreaterThan(C.SPRINT_SPEED * 0.97);
     expect(t95 / C.SIM_HZ).toBeLessThan(0.3);
     // Releasing keys stops quickly (no ice skating)
-    run(sim, 12, () => new Map([[a.id, { ...emptyCommand(), yaw: Math.PI }]]));
+    run(sim, C.SIM_HZ / 5, () => new Map([[a.id, { ...emptyCommand(), yaw: Math.PI }]]));
     expect(a.horizontalSpeed()).toBeLessThan(0.3);
   });
 
   it('jumps about one block high', () => {
     const { sim, a } = setup();
-    run(sim, 20, () => new Map([[a.id, { ...emptyCommand(), yaw: Math.PI }]]));
+    run(sim, C.SIM_HZ / 3, () => new Map([[a.id, { ...emptyCommand(), yaw: Math.PI }]]));
     let maxY = 0;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < C.SIM_HZ; i++) {
       sim.step(new Map([[a.id, { ...emptyCommand(), jump: i === 0, yaw: Math.PI }]]));
       sim.events.length = 0;
       maxY = Math.max(maxY, a.pos.y);
@@ -61,7 +61,7 @@ describe('movement', () => {
   it('walks up half-block stairs to the high platform', () => {
     const { sim, a } = setup();
     a.reset(-6.5, 0, -4.5, 0); // bottom of west stairs, facing north
-    run(sim, 150, () => new Map([[a.id, { ...emptyCommand(), forward: 1, yaw: 0 }]]));
+    run(sim, C.SIM_HZ * 2.5, () => new Map([[a.id, { ...emptyCommand(), forward: 1, yaw: 0 }]]));
     expect(a.pos.y).toBeGreaterThan(4.9);
   });
 });
@@ -96,7 +96,7 @@ describe('combat', () => {
       sim.step(new Map([[a.id, { ...emptyCommand(), yaw: Math.PI, forward: sprint ? 1 : 0, sprint, attacks: 1 }]]));
       expect(b.health).toBeLessThan(C.MAX_HEALTH);
       const locked = a.sprintLock;
-      run(sim, 40, () => new Map());
+      run(sim, Math.round(C.SIM_HZ * 0.67), () => new Map());
       return { dist: b.pos.z - z0, locked };
     };
     const walk = measure(false);
@@ -131,7 +131,7 @@ describe('bots', () => {
     ba.target = b;
     bb.target = a;
     let deaths = { a: 0, b: 0 };
-    for (let i = 0; i < 60 * 90; i++) {
+    for (let i = 0; i < C.SIM_HZ * 90; i++) {
       sim.step(new Map([
         [a.id, ba.update(C.SIM_DT)],
         [b.id, bb.update(C.SIM_DT)],
@@ -158,7 +158,7 @@ describe('bots', () => {
     ba.target = b;
     bb.target = a;
     let deaths = { a: 0, b: 0 };
-    for (let i = 0; i < 60 * 120; i++) {
+    for (let i = 0; i < C.SIM_HZ * 120; i++) {
       sim.step(new Map([
         [a.id, ba.update(C.SIM_DT)],
         [b.id, bb.update(C.SIM_DT)],
