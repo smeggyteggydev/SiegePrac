@@ -570,6 +570,8 @@ export class Game {
         if (inMenu) break;
         audio.death(e.victim === P ? undefined : e.victim.pos);
         const lake = e.cause === 'void';
+        // Only the first death of a round counts.
+        if (this.phase !== 'fight') break;
         if (e.victim === P) {
           this.killer = e.killer;
           if (this.mode === 'duel') {

@@ -181,16 +181,17 @@ export class Simulation {
       const k = 1 - Math.exp(-rate * dt);
       f.vel.x += (tx - f.vel.x) * k;
       f.vel.z += (tz - f.vel.z) * k;
-    } else if (hasWish) {
-      // Air steering: steer toward wish velocity, but never *add* speed beyond
-      // the target so knockback/momentum decays naturally.
-      const k = 1 - Math.exp(-C.AIR_ACCEL * control * dt);
-      f.vel.x += (tx - f.vel.x) * k;
-      f.vel.z += (tz - f.vel.z) * k;
     } else {
-      const k = Math.exp(-C.AIR_DRAG * dt);
-      f.vel.x *= k;
-      f.vel.z *= k;
+      // Air: constant drag plus a small linear push (classic 0.91/tick drag,
+      // ~0.02 b/t² accel). Knockback carries; you can't instantly fight it.
+      const drag = Math.exp(-C.AIR_DRAG * dt);
+      f.vel.x *= drag;
+      f.vel.z *= drag;
+      if (hasWish) {
+        const acc = (f.sprinting ? C.AIR_ACCEL_SPRINT : C.AIR_ACCEL) * control * dt;
+        f.vel.x += wx * acc;
+        f.vel.z += wz * acc;
+      }
     }
 
     // Jump

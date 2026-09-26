@@ -448,11 +448,15 @@ export class BotBrain {
       case 'engage': {
         const range = p.range + (this.mistakeKind === 'overrun' ? -1.4 : 0);
         // Spacing: push in when out of range, hold or back off when too close.
-        if (dist > range + 0.25) fwd = 1;
+        if (snap.hurt > 0.1 && this.rng.next() < p.comboFocus + 0.15) {
+          // Combo spacing: don't run into them during their hit window —
+          // hover just outside reach, re-enter as it ends.
+          fwd = dist > C.ATTACK_RANGE + 0.3 ? 1 : dist < range - 0.9 ? -1 : 0;
+        } else if (dist > range + 0.25) fwd = 1;
         else if (dist < range - 0.9) {
           fwd = -1;
           sprint = false;
-        } else fwd = snap.hurt > 0.12 && p.comboFocus > 0.5 ? 0.6 : 1;
+        } else fwd = 1;
 
         // Strafing
         this.strafeTimer -= dt;
