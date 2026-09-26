@@ -1,0 +1,25 @@
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { chromium } = require('/opt/node22/lib/node_modules/playwright');
+const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const errors = [];
+page.on('console', (m) => errors.push(`[${m.type()}] ${m.text().slice(0, 600)}`));
+page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
+await page.goto(process.env.URL || 'http://localhost:4173/');
+await page.waitForFunction(() => window.__siege, null, { timeout: 60000 });
+await page.waitForTimeout(2000);
+await page.click('text=PLAY');
+await page.waitForTimeout(500);
+const info = await page.evaluate(() => {
+  const s = document.querySelector('.modes-screen');
+  const r = s.getBoundingClientRect();
+  const cs = getComputedStyle(s);
+  const g = window.__siege.game;
+  let meshes = 0, tris = 0;
+  g.renderer.world.group.children.forEach(m => { meshes++; tris += m.geometry.index.count / 3; });
+  return { cls: s.className, rect: [r.x, r.y, r.width, r.height], op: cs.opacity, disp: cs.display, vis: cs.visibility, cards: document.querySelectorAll('.mode-card').length, meshes, tris, info: g.renderer.renderer.info.render };
+});
+console.log(JSON.stringify(info));
+console.log(errors.join('\n'));
+await browser.close();

@@ -102,4 +102,4 @@ export const BOT_REACTION_TIME = 0.16; // Normal
 /** Falling below this (into the lake) eliminates the fighter. */
 export const VOID_Y = -3.0;
 export const RESPAWN_DELAY = 1.6;
-export const ROUND_COUNTDOWN = 2.4;
+export const ROUND_COUNTDOWN = 3.0;
